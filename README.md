@@ -38,7 +38,7 @@ Every record MUST carry:
 
 | Field | Meaning |
 | --- | --- |
-| `kind` | session, transcript, tool-call, model-exchange, patch, image, log, approval, attestation, sbom, capture-failure |
+| `kind` | session, commit-evidence, transcript, tool-call, model-exchange, patch, image, log, network, approval, attestation, sbom, capture-failure, derivation, landing, release-bundle |
 | `run` | the run this record belongs to, and the attempt within it |
 | `identity` | the agent identity that acted — never a human account an agent happened to run under |
 | `environment` | where the request was processed: workstation, CI runner, cluster pod |
@@ -46,6 +46,8 @@ Every record MUST carry:
 | `digest` | complete content digest of the payload |
 | `locator` | immutable object locator, including the storage version |
 | `retention` | the materialized payload and record retention commitments |
+
+Three kinds carry the forge story. **`commit-evidence`** is the gating unit: the collector seals one per commit, covering the session segment that produced it, and binds both the exact SHA and the commit's `patch_id` — the durable identity of the change, which survives rebase, cherry-pick, and merge-queue re-forming. **`landing`** binds one protected-ref update to the evidence covering the commits it introduced, which is what keeps a squash-merged `main` verifiable. **`release-bundle`** aggregates a tag's whole commit range into the one document an auditor reads.
 
 Retention expiry means *eligible for disposition*, not *deleted*. Extensions, legal holds, releases, and disposition append as new events with their own storage statements. Effective retention can increase. It cannot decrease.
 
@@ -90,6 +92,8 @@ Source: [Claude Code memory — choose where to put your CLAUDE.md files](https:
 
 Pensieve rides that same channel. The property that matters is not the specific path but the ordering: the collector is installed by whoever owns the machine, ahead of anything the session can change. Evidence collection an agent can turn off is evidence collection that will be reported as complete on the runs where it was off.
 
+That ordering does not hold on every harness. Claude Code and Codex both have a managed scope a session cannot override; Pi resolves configuration only from user and project scope, so its collector is authoritative only where the machine offers a wrapped launcher rather than a bare `pi`. Every collector therefore records its own install scope, and a verifier reads that scope to decide whether collection was authoritative or advisory — see [CLC-001.2](./docs/requirements/CLC-001-harness-collectors.md).
+
 ## Capture completeness
 
 Silence and success must not look alike.
@@ -99,6 +103,16 @@ Silence and success must not look alike.
 - Partial evidence from failed, cancelled, and retried attempts MUST be retained. Each retry is a new attempt with its own session record.
 - A capture profile MUST name a primary sink and an independent emergency failure sink under a different identity and failure domain. If the primary sink fails, the collector writes a signed minimal capture-failure record to the emergency path.
 - Prohibited material MUST NOT be captured and deleted later. Where a retention obligation conflicts with a privacy or residency rule, the profile fails to load.
+
+## Specification
+
+Formal obligations live in [`docs/requirements/`](./docs/requirements/README.md), split by the component that can fail them:
+
+- [SRV-001: Evidence Sink](./docs/requirements/SRV-001-evidence-sink.md) — identity, ingest, the record model, write-once storage and statements, retention and holds, landing records, reconciliation, release bundles, verification.
+- [CLC-001: Harness Collectors](./docs/requirements/CLC-001-harness-collectors.md) — install authority, commit segmentation, capture completeness, redaction, delivery, per-harness projections, bypass.
+- [CICD-001: Evidence Gates](./docs/requirements/CICD-001-evidence-gates.md) — the four forge gates, their authority, failure semantics, the coverage epoch and ratchet, forge portability.
+
+[`code/example-repo/`](./code/example-repo/README.md) is the working shape of CICD-001: five GitHub workflows, two rulesets, and a repository policy file.
 
 ## Local bring-up (planned)
 

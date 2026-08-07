@@ -1,0 +1,102 @@
+# Tier 3 — preventive. No tag, and no release, while any commit in the range
+# is uncovered. This is where tier 2's findings acquire teeth.
+#
+# Requirements: CICD-001.4
+#
+# release-please recommends squash-merge for linear history, which is exactly
+# the merge strategy that breaks naive evidence binding: the landed commit is a
+# new SHA claimed by no run. Coverage therefore resolves through the landing
+# records written by evidence-main.yml, not through the commits directly.
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write # tag and release
+  pull-requests: write # the release pull request
+  id-token: write # OIDC to the sink
+  attestations: write # corroborating attestation — CICD-001.4.6
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+      previous_tag: ${{ steps.rp.outputs.previous_tag_name }}
+    steps:
+      - id: rp
+        uses: googleapis/release-please-action@0000000000000000000000000000000000000000 # v4 — REPLACE
+        with:
+          release-type: node
+
+  # The release pull request was already gated by evidence-pr.yml, which runs
+  # the range check when the release label is present (CICD-001.2.11). This job
+  # re-verifies at tag time and produces the durable artifact.
+  evidence-bundle:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Fetch history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2 — REPLACE
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      # Fails the release if any commit in previous_tag..tag is uncovered and
+      # carries no declared exemption. CICD-001.4.1
+      - name: Verify release range
+        uses: ai-outfitter/pensieve/actions/verify-range@0000000000000000000000000000000000000000 # v0.1.0 — REPLACE
+        with:
+          sink: ${{ vars.PENSIEVE_SINK }}
+          sink_key: ${{ vars.PENSIEVE_SINK_KEY }}
+          mode: tag
+          from: ${{ needs.release-please.outputs.previous_tag }}
+          to: ${{ needs.release-please.outputs.tag_name }}
+          policy: .github/pensieve.yml
+          on_sink_unreachable: fail
+
+      # One document per release: the range, every commit's coverage record and
+      # storage statements, every policy digest in force, every contributing
+      # identity, and every declared gap. Signed and stored before the release
+      # is published. CICD-001.4.2, SRV-001.9
+      - id: bundle
+        name: Build and store release bundle
+        uses: ai-outfitter/pensieve/actions/release-bundle@0000000000000000000000000000000000000000 # v0.1.0 — REPLACE
+        with:
+          sink: ${{ vars.PENSIEVE_SINK }}
+          sink_key: ${{ vars.PENSIEVE_SINK_KEY }}
+          tag: ${{ needs.release-please.outputs.tag_name }}
+          from: ${{ needs.release-please.outputs.previous_tag }}
+
+      # Corroboration from a second, independent verifier. An attestation is
+      # not a retention receipt — the storage statement is. CICD-001.4.6
+      - name: Attest the bundle
+        uses: actions/attest@0000000000000000000000000000000000000000 # v4 — REPLACE
+        with:
+          subject-name: ${{ needs.release-please.outputs.tag_name }}-evidence
+          subject-digest: sha256:${{ steps.bundle.outputs.digest }}
+          predicate-type: https://ai-outfitter.dev/pensieve/release-bundle/v0.1
+
+      - name: Attach bundle digest to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+          DIGEST: ${{ steps.bundle.outputs.digest }}
+        run: |
+          gh release edit "$TAG" --notes-file - <<EOF
+          $(gh release view "$TAG" --json body --jq .body)
+
+          ---
+          Pensieve release bundle: \`sha256:${DIGEST}\`
+          EOF

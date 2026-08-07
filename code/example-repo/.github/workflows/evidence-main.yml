@@ -1,0 +1,58 @@
+# Tier 2 — detective, not preventive. The commit is already on the branch when
+# this runs. Its job is LINKAGE: bind what landed to the evidence that covers
+# it, so tier 3 can answer coverage with one lookup.
+#
+# Requirements: CICD-001.3
+#
+# This job cannot block. Findings it produces are enforced at release time by
+# evidence-release / release.yml. Completeness does not come from this trigger
+# — push payloads truncate their commit lists and webhooks are missed — it
+# comes from evidence-reconcile.yml. CICD-001.3.6
+name: Evidence — landing
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+# Landing records are an ordered chain per ref. Do not process two updates to
+# the same ref concurrently, and never cancel one in flight.
+concurrency:
+  group: evidence-landing-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  landing:
+    name: evidence/landing
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Fetch history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2 — REPLACE
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      # Writes one landing record for this ref update:
+      #   - the commits before..after introduced
+      #   - an attribution for each: run | forge-generated | human | exempt | unattested
+      #   - the derivation: identical | squashed-from | rebased-from | cherry-picked-from | merge-of
+      #   - tree_delta — content no derivation explains, attributed to the merging identity
+      # CICD-001.3.1 – CICD-001.3.4
+      - name: Record landing
+        uses: ai-outfitter/pensieve/actions/record-landing@0000000000000000000000000000000000000000 # v0.1.0 — REPLACE
+        with:
+          sink: ${{ vars.PENSIEVE_SINK }}
+          sink_key: ${{ vars.PENSIEVE_SINK_KEY }}
+          ref: ${{ github.ref }}
+          # `before` is the zero object on branch creation, and a chain break
+          # when it does not match the previous record's `after`.
+          before: ${{ github.event.before }}
+          after: ${{ github.event.after }}
+          forced: ${{ github.event.forced }}
+          policy: .github/pensieve.yml
+          on_sink_unreachable: fail

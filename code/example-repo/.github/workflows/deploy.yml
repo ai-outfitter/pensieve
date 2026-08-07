@@ -1,0 +1,58 @@
+# Tier 4 — preventive, and the strictest gate, because it is the only one whose
+# failure has effect outside the forge.
+#
+# Requirements: CICD-001.5
+#
+# The authoritative gate is the custom deployment protection rule bound to the
+# `production` environment: a GitHub App that approves or rejects entry to the
+# environment, and therefore sits OUTSIDE the workflow it judges. The verify
+# step below is defense in depth, and is the only gate available on a forge
+# with no environment protection mechanism (CICD-001.5.4).
+name: Deploy
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to deploy
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      # Configure on this environment:
+      #   - the Pensieve custom deployment protection rule (authoritative)
+      #   - required reviewers, so a human is shown the coverage report
+      #   - "disallow bypassing configured protection rules"
+      # CICD-001.5.3, CICD-001.5.5
+      name: production
+      url: https://example.invalid
+    steps:
+      # Re-verifies rather than trusting the release gate's earlier verdict:
+      # coverage, storage-statement locks still in force, and bundle freshness.
+      # A bundle past its freshness lifetime is unknown, and unknown is not
+      # conforming. CICD-001.5.2, CICD-001.7.2
+      - name: Verify release bundle
+        uses: ai-outfitter/pensieve/actions/verify-bundle@0000000000000000000000000000000000000000 # v0.1.0 — REPLACE
+        with:
+          sink: ${{ vars.PENSIEVE_SINK }}
+          sink_key: ${{ vars.PENSIEVE_SINK_KEY }}
+          tag: ${{ github.event.release.tag_name || inputs.tag }}
+          require_storage_locks: true
+          require_fresh: true
+          on_sink_unreachable: fail
+
+      - name: Deploy
+        run: echo "deploying ${{ github.event.release.tag_name || inputs.tag }}"

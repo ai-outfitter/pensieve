@@ -1,0 +1,54 @@
+# Repository evidence policy.
+#
+# This file MAY tighten the organization policy. It MUST NOT loosen it
+# (CICD-001.1.8). The sink resolves the organization floor from org-level
+# configuration and rejects any value here that is weaker.
+version: 1
+
+# The commit from which coverage is required. Every commit before it is
+# attributed `exempt` with rule `pre-epoch` — exempt, never "covered".
+# Without an epoch, the first release in an existing repository fails forever
+# and the convention gets switched off in week one. CICD-001.8.1, CICD-001.8.2
+epoch:
+  commit: 0000000000000000000000000000000000000000 # REPLACE with the adoption commit
+  rule: pre-epoch
+  declared: 2026-08-07
+
+# Which artifact classes a session must capture for its commits to count.
+# A class the harness cannot expose is a declared gap, and a declared gap fails
+# the gate. CLC-001.4
+capture_profile: agent-authored-changes
+
+# Payload and record retention floor. Storage statements below this floor fail
+# verification. Effective retention may increase; it may not decrease.
+# SRV-001.6.3
+retention_floor: 7y
+
+# Freshness of a release bundle at deployment time. Past this, the bundle is
+# unknown, and unknown is not conforming. SRV-001.9.7
+bundle_freshness: 30d
+
+# What each class of author must provide. A commit that matches no rule fails.
+# CICD-001.2.8
+authorship:
+  agent: require-commit-evidence
+  human: require-verified-signature
+
+# Every exemption names its rule. A silent absence is never an exemption.
+# CICD-001.8.3
+exemptions:
+  - rule: release-automation
+    identity: release-please[bot]
+    scope: commits that only touch CHANGELOG.md, package.json, and version files
+    declared: 2026-08-07
+
+# Where evidence goes when the primary sink fails. Different identity,
+# different failure domain. CLC-001.6.5, SRV-001.11.3
+emergency_sink: ${PENSIEVE_EMERGENCY_SINK}
+
+# Break-glass exists, requires a named human, and is itself recorded.
+# CICD-001.7.4, CICD-001.7.5
+break_glass:
+  enabled: true
+  requires_identity: true
+  records_to: primary
