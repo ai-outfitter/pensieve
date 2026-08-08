@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "lib": [
+      "ESNext"
+    ],
+    "target": "ESNext",
+    "module": "Preserve",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "allowJs": true,
+    "allowImportingTsExtensions": true,
+    "types": [
+      "bun"
+    ],
+    "strict": true,
+    "skipLibCheck": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "paths": {
+      "@pensieve/collector-core": [
+        "./collectors/core/src/index.ts"
+      ],
+      "@pensieve/collector-core/hook-runner": [
+        "./collectors/core/src/hook-runner.ts"
+      ]
+    }
+  },
+  "include": [
+    "server/src",
+    "collectors/*/src"
+  ]
+}

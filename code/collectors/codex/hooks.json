@@ -1,0 +1,38 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "handlers": [
+          {
+            "type": "command",
+            "command": ["/opt/pensieve/bin/pensieve-codex-hook", "--scope", "managed"],
+            "timeout_ms": 30000
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "handlers": [
+          {
+            "type": "command",
+            "command": ["/opt/pensieve/bin/pensieve-codex-hook", "--scope", "managed"],
+            "timeout_ms": 30000
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "handlers": [
+          {
+            "type": "command",
+            "command": ["/opt/pensieve/bin/pensieve-codex-hook", "--scope", "managed"],
+            "timeout_ms": 30000
+          }
+        ]
+      }
+    ]
+  }
+}

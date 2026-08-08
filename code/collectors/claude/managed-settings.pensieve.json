@@ -1,0 +1,53 @@
+{
+  "env": {
+    "PENSIEVE_INSTALL_SCOPE": "managed"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/pensieve/bin/pensieve-claude-hook --scope managed",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/pensieve/bin/pensieve-claude-hook --scope managed",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/pensieve/bin/pensieve-claude-hook --scope managed",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/pensieve/bin/pensieve-claude-hook --scope managed",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

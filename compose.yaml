@@ -1,0 +1,103 @@
+# Local Pensieve stack.
+#
+#   docker compose up -d
+#   docker compose exec workbench outfitter
+#
+# The bucket is created WITH OBJECT LOCK and a default COMPLIANCE retention, so
+# the write-once claim is exercised rather than asserted. Without a signing key
+# the sink runs unattested and marks every record non-conforming — see the
+# PENSIEVE_SIGNING_KEY note below.
+
+name: pensieve
+
+services:
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: pensieve
+      MINIO_ROOT_PASSWORD: pensieve-dev-secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Object Lock can only be enabled at bucket creation. A bucket made without
+  # it can never be locked afterwards, which is why this runs once and why the
+  # sink refuses to claim a lock it cannot read back. SRV-001.5.3.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 pensieve pensieve-dev-secret &&
+        (mc mb --with-lock local/pensieve || true) &&
+        mc version enable local/pensieve &&
+        mc retention set --default COMPLIANCE 7d local/pensieve &&
+        echo 'bucket ready: object lock COMPLIANCE, default 7d'
+      "
+
+  pensieve:
+    build:
+      context: ./code
+      dockerfile: server/Dockerfile
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      PORT: "4319"
+      PENSIEVE_SINK_ID: pensieve.local
+      PENSIEVE_S3_ENDPOINT: http://minio:9000
+      PENSIEVE_S3_BUCKET: pensieve
+      PENSIEVE_S3_REGION: us-east-1
+      PENSIEVE_S3_ACCESS_KEY_ID: pensieve
+      PENSIEVE_S3_SECRET_ACCESS_KEY: pensieve-dev-secret
+      PENSIEVE_INDEX: /var/lib/pensieve/index.sqlite
+      PENSIEVE_RETENTION_FLOOR_DAYS: "7"
+      # Local stack only. Accepts `Authorization: Bearer dev:<identity>`.
+      PENSIEVE_DEV_AUTH: "1"
+      # Generate one with:
+      #   docker compose run --rm --entrypoint bun pensieve run src/keygen.ts
+      # Leave it unset and the sink reports itself unattested and every record
+      # non-conforming, which is the correct behavior, not a bug. SRV-001.1.6.
+      PENSIEVE_SIGNING_KEY: "${PENSIEVE_SIGNING_KEY:-}"
+    ports:
+      - "4319:4319"
+    volumes:
+      - pensieve-index:/var/lib/pensieve
+
+  # Exec in and run outfitter. The three collectors are already installed at the
+  # system locations each harness reads first, by root, in the image build.
+  workbench:
+    build:
+      context: .
+      dockerfile: docker/workbench.Dockerfile
+    depends_on:
+      - pensieve
+    environment:
+      PENSIEVE_SINK: http://pensieve:4319
+      PENSIEVE_TOKEN: dev:agent:workbench
+      PENSIEVE_IDENTITY: agent:workbench
+      PENSIEVE_ENVIRONMENT: container
+      PENSIEVE_SPOOL: /var/lib/pensieve/spool
+      PENSIEVE_STATE: /var/lib/pensieve/state
+      PENSIEVE_PROFILE: agent-authored-changes
+      PENSIEVE_REQUIRED_CLASSES: session,tool-call
+      HOME: /workspace
+    volumes:
+      - workbench-home:/workspace
+      - workbench-evidence:/var/lib/pensieve
+
+volumes:
+  minio-data:
+  pensieve-index:
+  workbench-home:
+  workbench-evidence:

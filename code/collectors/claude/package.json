@@ -1,0 +1,8 @@
+{
+  "name": "@pensieve/collector-claude",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "module": "src/hook.ts",
+  "dependencies": { "@pensieve/collector-core": "workspace:*" }
+}

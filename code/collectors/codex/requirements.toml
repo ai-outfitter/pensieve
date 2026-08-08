@@ -1,0 +1,7 @@
+# Codex admin requirements.
+#
+# `allow_managed_hooks_only` is only honored in requirements.toml. Setting it in
+# config.toml does nothing. With it enabled, Codex ignores user, project, and
+# session hook configuration and runs only hooks from managed sources — which is
+# the strongest bypass answer any of the three harnesses offers. CLC-001.2.6.
+allow_managed_hooks_only = true
