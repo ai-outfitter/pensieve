@@ -24,21 +24,50 @@ export class PensieveClient {
 		return this.options.spool;
 	}
 
-	/** Spool first, then attempt delivery. Order is what makes loss impossible. */
+	/**
+	 * Spool first, then drain the spool oldest-first. Writing before sending is
+	 * what makes loss impossible; draining in order is what makes delivery
+	 * ordered even after a recovery — a record submitted now is never delivered
+	 * ahead of one that has been waiting. CLC-001.6.1, CLC-001.6.3.
+	 */
 	async submit(record: EvidenceRecord): Promise<{ delivered: boolean; digest?: string }> {
 		const dir = await this.spoolPath();
-		const name = `${Date.now()}-${crypto.randomUUID()}.json`;
+		// Monotonic prefix so lexical sort is chronological across a restart.
+		const name = `${Date.now().toString().padStart(14, "0")}-${crypto.randomUUID()}.json`;
 		const path = join(dir, name);
 		await Bun.write(path, JSON.stringify(record));
 
-		try {
-			const digest = await this.post(this.options.sink, this.options.token, record);
-			await unlink(path);
-			return { delivered: true, digest };
-		} catch (error) {
-			await this.reportFailure(record, error);
-			return { delivered: false };
+		const delivered = await this.drain();
+		const digest = delivered.get(path);
+		if (digest === undefined && delivered.size === 0) {
+			await this.reportFailure(record, new Error("sink unreachable"));
 		}
+		return { delivered: digest !== undefined, digest };
+	}
+
+	/** Deliver spooled records oldest-first, stopping at the first failure. */
+	private async drain(): Promise<Map<string, string>> {
+		const dir = await this.spoolPath();
+		const names = (await readdir(dir)).filter((name) => name.endsWith(".json")).sort();
+		const delivered = new Map<string, string>();
+		for (const name of names) {
+			const path = join(dir, name);
+			let record: EvidenceRecord;
+			try {
+				record = (await Bun.file(path).json()) as EvidenceRecord;
+			} catch {
+				continue;
+			}
+			try {
+				const digest = await this.post(this.options.sink, this.options.token, record);
+				await unlink(path);
+				delivered.set(path, digest);
+			} catch {
+				// Stop rather than reorder. A later record must not overtake this one.
+				break;
+			}
+		}
+		return delivered;
 	}
 
 	private async post(sink: string, token: string, record: EvidenceRecord): Promise<string> {
@@ -76,22 +105,9 @@ export class PensieveClient {
 
 	/** Deferred upload for offline and air-gapped sessions. CLC-001.6.4. */
 	async flush(): Promise<{ delivered: number; remaining: number }> {
+		const delivered = await this.drain();
 		const dir = await this.spoolPath();
-		const names = (await readdir(dir)).filter((name) => name.endsWith(".json")).sort();
-		let delivered = 0;
-		for (const name of names) {
-			const path = join(dir, name);
-			const record = (await Bun.file(path).json()) as EvidenceRecord;
-			try {
-				await this.post(this.options.sink, this.options.token, record);
-				await unlink(path);
-				delivered += 1;
-			} catch {
-				// Ordered delivery: stop at the first failure rather than reorder.
-				break;
-			}
-		}
 		const remaining = (await readdir(dir)).filter((name) => name.endsWith(".json")).length;
-		return { delivered, remaining };
+		return { delivered: delivered.size, remaining };
 	}
 }

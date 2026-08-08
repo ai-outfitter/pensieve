@@ -46,6 +46,9 @@ function normalize(payload: ClaudeHookPayload): NormalizedEvent | null {
 				toolName: payload.tool_name,
 				toolInput: payload.tool_input,
 				toolOutput: payload.tool_output,
+				// Both events map to one phase, so the failure must be marked or the
+				// record would be indistinguishable from a success. CLC-001.1.5.
+				isError: payload.hook_event_name === "PostToolUseFailure",
 				...shared,
 			};
 		case "SessionEnd":

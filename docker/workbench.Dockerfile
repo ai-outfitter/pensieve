@@ -33,11 +33,7 @@ COPY code/collectors/pi/ /tmp/pensieve-src/pi/
 RUN set -eux; \
 	sh /tmp/pensieve-src/claude/install.sh /tmp/pensieve-dist/pensieve-claude-hook; \
 	sh /tmp/pensieve-src/codex/install.sh /tmp/pensieve-dist/pensieve-codex-hook; \
-	if command -v pi >/dev/null 2>&1; then \
-		sh /tmp/pensieve-src/pi/install.sh /tmp/pensieve-dist/pi-extension.js; \
-	else \
-		echo "pi not present in this image; skipping launcher wrapper"; \
-	fi; \
+	sh /tmp/pensieve-src/pi/install.sh /tmp/pensieve-dist/pi-extension.js; \
 	rm -rf /tmp/pensieve-src /tmp/pensieve-dist
 
 USER 1000:1000

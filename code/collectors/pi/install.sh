@@ -21,9 +21,23 @@ if [ "$(id -u)" != "0" ]; then
 	exit 1
 fi
 
-REAL_PI="$(command -v pi || true)"
+# Pi may be on PATH, or bundled inside the Outfitter install and not exported —
+# the published Outfitter image ships it at
+# /usr/local/lib/node_modules/@ai-outfitter/outfitter/node_modules/.bin/pi.
+# A wrapper that only checks PATH silently skips the collector there.
+REAL_PI="${PI_BIN:-$(command -v pi || true)}"
 if [ -z "$REAL_PI" ]; then
-	echo "pi is not on PATH; install pi before installing the collector" >&2
+	for candidate in \
+		/usr/local/lib/node_modules/@ai-outfitter/outfitter/node_modules/.bin/pi \
+		/usr/lib/node_modules/@ai-outfitter/outfitter/node_modules/.bin/pi; do
+		if [ -x "$candidate" ]; then
+			REAL_PI="$candidate"
+			break
+		fi
+	done
+fi
+if [ -z "$REAL_PI" ]; then
+	echo "pi not found on PATH or in an Outfitter install; set PI_BIN to its path" >&2
 	exit 1
 fi
 if [ "$REAL_PI" = "/usr/local/bin/pi" ]; then
@@ -45,7 +59,12 @@ WRAPPER
 chown root:root /usr/local/bin/pi
 chmod 0755 /usr/local/bin/pi
 
-install -d -o root -g root -m 0733 /var/lib/pensieve/spool
-install -d -o root -g root -m 0733 /var/lib/pensieve/state
+# Sticky-bit shared directories, like /tmp. The agent must be able to create
+# AND list its own spooled records, so a drop-box mode (0733) is wrong: drain
+# has to scan the directory. The security property is that the session cannot
+# alter or remove the COLLECTOR (/opt/pensieve, /etc), not that it cannot see
+# its own pending evidence.
+install -d -o root -g root -m 1777 /var/lib/pensieve/spool
+install -d -o root -g root -m 1777 /var/lib/pensieve/state
 
 echo "pi collector installed at launcher scope (wrapping ${REAL_PI})"

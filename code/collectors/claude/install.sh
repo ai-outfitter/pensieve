@@ -26,10 +26,12 @@ install -o root -g root -m 0644 \
 	"$HERE/managed-settings.pensieve.json" \
 	/etc/claude-code/managed-settings.d/pensieve.json
 
-# Spool and state are root-owned but group-writable by the agent's group, so a
-# non-root session can append evidence without being able to rewrite the
-# installed collector.
-install -d -o root -g root -m 0733 /var/lib/pensieve/spool
-install -d -o root -g root -m 0733 /var/lib/pensieve/state
+# Sticky-bit shared directories, like /tmp. The agent must be able to create
+# AND list its own spooled records, so a drop-box mode (0733) is wrong: drain
+# has to scan the directory. The security property is that the session cannot
+# alter or remove the COLLECTOR (/opt/pensieve, /etc), not that it cannot see
+# its own pending evidence.
+install -d -o root -g root -m 1777 /var/lib/pensieve/spool
+install -d -o root -g root -m 1777 /var/lib/pensieve/state
 
 echo "claude-code collector installed at managed scope"

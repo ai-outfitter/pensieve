@@ -29,7 +29,12 @@ install -d -o root -g root -m 0755 "$CODEX_ETC"
 install -o root -g root -m 0644 "$HERE/hooks.json" "$CODEX_ETC/hooks.json"
 install -o root -g root -m 0644 "$HERE/requirements.toml" "$CODEX_ETC/requirements.toml"
 
-install -d -o root -g root -m 0733 /var/lib/pensieve/spool
-install -d -o root -g root -m 0733 /var/lib/pensieve/state
+# Sticky-bit shared directories, like /tmp. The agent must be able to create
+# AND list its own spooled records, so a drop-box mode (0733) is wrong: drain
+# has to scan the directory. The security property is that the session cannot
+# alter or remove the COLLECTOR (/opt/pensieve, /etc), not that it cannot see
+# its own pending evidence.
+install -d -o root -g root -m 1777 /var/lib/pensieve/spool
+install -d -o root -g root -m 1777 /var/lib/pensieve/state
 
 echo "codex collector installed at managed scope (${CODEX_ETC})"

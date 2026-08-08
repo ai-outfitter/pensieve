@@ -16,6 +16,7 @@ export interface NormalizedEvent {
 	toolName?: string;
 	toolInput?: unknown;
 	toolOutput?: unknown;
+	isError?: boolean;
 	transcriptPath?: string;
 }
 
@@ -88,6 +89,7 @@ export async function runHook(raw: NormalizedEvent, options: HookOptions): Promi
 				tool_name: raw.toolName,
 				tool_input: raw.toolInput,
 				tool_output: raw.toolOutput,
+				is_error: raw.isError ?? false,
 			});
 			state.note("tool-call", result.digest);
 			await maybeSeal(raw.cwd, context, client, state);

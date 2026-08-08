@@ -46,6 +46,7 @@ function normalize(payload: CodexHookPayload): NormalizedEvent | null {
 				toolName: payload.tool_name,
 				toolInput: payload.tool_input,
 				toolOutput: payload.tool_response,
+				isError: Boolean((payload.tool_response as { error?: unknown } | undefined)?.error),
 				...shared,
 			};
 		case "SessionEnd":

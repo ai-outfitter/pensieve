@@ -43,6 +43,10 @@ That table is the design in one place. Claude Code and Codex have a managed scop
 
 Command hooks are a new process per event, so segment state lives in a root-owned file under `/var/lib/pensieve/state`. The in-process Pi extension keeps it in memory.
 
+Two practical notes. The Claude Code and Codex hooks compile to standalone binaries of roughly 90 MB each — that is Bun's runtime, and it is the price of a managed hook that does not depend on the session's own toolchain. And Pi is often bundled inside an Outfitter install rather than exported on `PATH` (the published image ships it under `node_modules/.bin/pi`), so the installer looks there too; a wrapper that only checked `PATH` would silently skip the collector.
+
+Records spool to disk before they are sent, and the spool drains oldest-first, so a record submitted after an outage never overtakes one that has been waiting.
+
 Every collector observes git to find commits rather than trusting the agent to announce them, and records the invocation arguments it can see — including the ones that would disable it. A session in which the collector never ran produces no record at all, and the sink treats absence as unattested, never as clean.
 
 ## Local stack
