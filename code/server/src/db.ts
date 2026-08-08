@@ -14,6 +14,8 @@ export interface IndexedRecord {
 	sha: string | null;
 	patch_id: string | null;
 	ref: string | null;
+	/** For a landing, the ref's new head, so the next update's `before` can be compared. */
+	ref_head: string | null;
 	tag: string | null;
 	status: string | null;
 }
@@ -34,6 +36,7 @@ export class RecordIndex {
 				sha         TEXT,
 				patch_id    TEXT,
 				ref         TEXT,
+				ref_head    TEXT,
 				tag         TEXT,
 				status      TEXT,
 				received_at TEXT NOT NULL
@@ -50,14 +53,31 @@ export class RecordIndex {
 				created_at TEXT NOT NULL
 			);
 		`);
+		this.addMissingColumns();
+	}
+
+	/**
+	 * `CREATE TABLE IF NOT EXISTS` is a no-op against an index created by an
+	 * earlier version, so a newly added column has to be applied explicitly or
+	 * every insert fails against an existing store. Records themselves are
+	 * immutable and live in the object store; this index is derived and
+	 * additive, so adding nullable columns is the whole migration story.
+	 */
+	private addMissingColumns(): void {
+		const columns = new Set(
+			(this.db.query("PRAGMA table_info(records)").all() as Array<{ name: string }>).map((c) => c.name),
+		);
+		for (const [name, type] of [["ref_head", "TEXT"]] as const) {
+			if (!columns.has(name)) this.db.run(`ALTER TABLE records ADD COLUMN ${name} ${type}`);
+		}
 	}
 
 	insert(record: IndexedRecord): void {
 		this.db
 			.query(
 				`INSERT OR IGNORE INTO records
-				 (digest, kind, run, identity, created_at, sha, patch_id, ref, tag, status, received_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				 (digest, kind, run, identity, created_at, sha, patch_id, ref, ref_head, tag, status, received_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			)
 			.run(
 				record.digest,
@@ -68,6 +88,7 @@ export class RecordIndex {
 				record.sha,
 				record.patch_id,
 				record.ref,
+				record.ref_head,
 				record.tag,
 				record.status,
 				new Date().toISOString(),
@@ -90,22 +111,10 @@ export class RecordIndex {
 			.all(patchId) as IndexedRecord[];
 	}
 
-	byDigest(digest: string): IndexedRecord | null {
-		return (this.db.query("SELECT * FROM records WHERE digest = ?").get(digest) as IndexedRecord | null) ?? null;
-	}
-
 	landingsForRef(ref: string): IndexedRecord[] {
 		return this.db
 			.query("SELECT * FROM records WHERE kind = 'landing' AND ref = ? ORDER BY created_at ASC")
 			.all(ref) as IndexedRecord[];
-	}
-
-	byTag(tag: string): IndexedRecord | null {
-		return (
-			(this.db
-				.query("SELECT * FROM records WHERE kind = 'release-bundle' AND tag = ? ORDER BY created_at DESC LIMIT 1")
-				.get(tag) as IndexedRecord | null) ?? null
-		);
 	}
 
 	/** Findings append. They never mutate an existing record. SRV-001.8.5. */

@@ -1,6 +1,4 @@
-import type { CaptureProfile, CollectorContext, InstallScope, RecordKind } from "./types.ts";
-
-const SCOPES: InstallScope[] = ["managed", "launcher", "user", "project", "session"];
+import { INSTALL_SCOPES, type CaptureProfile, type CollectorContext, type InstallScope, type RecordKind } from "./types.ts";
 
 /**
  * The install scope is written by the installer into the environment it
@@ -11,22 +9,21 @@ const SCOPES: InstallScope[] = ["managed", "launcher", "user", "project", "sessi
  */
 export function installScope(env = Bun.env): InstallScope {
 	const declared = env.PENSIEVE_INSTALL_SCOPE as InstallScope | undefined;
-	return declared && SCOPES.includes(declared) ? declared : "session";
+	return declared && INSTALL_SCOPES.includes(declared) ? declared : "session";
 }
 
-export function profileFor(harness: string, env = Bun.env): CaptureProfile {
+/**
+ * `unsupported` is declared by the collector, never inferred here from a
+ * harness name. Capability follows the event surface a collector actually
+ * uses, so only the collector can state it — and a new collector must not
+ * require an edit to shared code to describe itself. CLC-001.1.7, CLC-001.7.2,
+ * CLC-001.7.4.
+ */
+export function profileFor(unsupported: RecordKind[], env = Bun.env): CaptureProfile {
 	const required = (env.PENSIEVE_REQUIRED_CLASSES ?? "session,tool-call,patch,model-exchange")
 		.split(",")
 		.map((entry) => entry.trim())
 		.filter(Boolean) as RecordKind[];
-
-	// Measured, not assumed. Claude Code and Codex hooks never carry the model
-	// request or response body, so a profile that requires model-exchange gets a
-	// declared gap on those harnesses rather than a transcript standing in for
-	// it. Pi exposes before_provider_request, so it has no such gap.
-	// CLC-001.7.2.
-	const unsupported: RecordKind[] =
-		harness === "pi" ? [] : (["model-exchange"] as RecordKind[]);
 
 	return { name: env.PENSIEVE_PROFILE ?? "agent-authored-changes", required, unsupported };
 }
@@ -35,6 +32,8 @@ export interface ContextOptions {
 	harness: string;
 	harnessVersion: string;
 	eventSurface: string;
+	/** Artifact classes this collector's event surface cannot expose. */
+	unsupported: RecordKind[];
 	run: string;
 	cwd: string;
 }
@@ -50,7 +49,7 @@ export function buildContext(options: ContextOptions, env = Bun.env): CollectorC
 		harness: options.harness,
 		harness_version: options.harnessVersion,
 		event_surface: options.eventSurface,
-		profile: profileFor(options.harness, env),
+		profile: profileFor(options.unsupported, env),
 		cwd: options.cwd,
 	};
 }

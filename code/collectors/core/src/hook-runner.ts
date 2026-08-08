@@ -1,8 +1,8 @@
 import { PensieveClient } from "./client.ts";
 import { buildContext, clientOptions } from "./context.ts";
-import { commitInfo, head } from "./git.ts";
+import { CommitWatcher } from "./segment.ts";
 import { SessionState } from "./state.ts";
-import type { CollectorContext, EvidenceRecord, RecordKind } from "./types.ts";
+import type { RecordKind } from "./types.ts";
 
 /**
  * The harness-neutral event a collector forwards. Claude Code and Codex both
@@ -24,6 +24,8 @@ export interface HookOptions {
 	harness: string;
 	harnessVersion: string;
 	eventSurface: string;
+	/** Artifact classes this harness cannot expose, declared by the collector. */
+	unsupported: RecordKind[];
 	argv: string[];
 }
 
@@ -33,7 +35,18 @@ function scopeFromArgv(argv: string[]): string | undefined {
 	return index >= 0 ? argv[index + 1] : undefined;
 }
 
+/**
+ * The command-hook entry point. It differs from the in-process extension only
+ * in where segment state lives: a hook is a fresh process per event, so it
+ * uses the file-backed SessionState. Everything else is the shared
+ * CommitWatcher.
+ */
 export async function runHook(raw: NormalizedEvent, options: HookOptions): Promise<void> {
+	// A pre-tool event emits nothing — the post event carries both the input and
+	// the result, so one record describes the whole call. Return before touching
+	// state, rather than reading and rewriting it unchanged.
+	if (raw.phase === "pre-tool") return;
+
 	const scope = scopeFromArgv(options.argv);
 	if (scope) Bun.env.PENSIEVE_INSTALL_SCOPE = scope;
 
@@ -42,6 +55,7 @@ export async function runHook(raw: NormalizedEvent, options: HookOptions): Promi
 			harness: options.harness,
 			harnessVersion: options.harnessVersion,
 			eventSurface: options.eventSurface,
+			unsupported: options.unsupported,
 			run: raw.sessionId,
 			cwd: raw.cwd,
 		},
@@ -49,66 +63,38 @@ export async function runHook(raw: NormalizedEvent, options: HookOptions): Promi
 	);
 	const client = new PensieveClient(clientOptions(Bun.env));
 	const state = await SessionState.open(Bun.env.PENSIEVE_STATE ?? "/var/lib/pensieve/state", raw.sessionId);
-
-	const base = (kind: RecordKind): EvidenceRecord => ({
-		kind,
-		run: context.run,
-		attempt: context.attempt,
-		identity: context.identity,
-		environment: context.environment,
-		policy_digest: context.policy_digest,
-		created_at: new Date().toISOString(),
-		install_scope: context.install_scope,
-		harness: context.harness,
-		harness_version: context.harness_version,
-		event_surface: context.event_surface,
-	});
+	const watcher = new CommitWatcher(context, client, state);
 
 	switch (raw.phase) {
 		case "session-start": {
-			state.setHead(await head(raw.cwd));
+			await watcher.start();
 			// Record the invocation arguments, including any that disable hooks or
 			// extensions. CLC-001.8.1.
 			const result = await client.submit({
-				...base("session"),
+				...watcher.base("session"),
 				session_id: raw.sessionId,
 				cwd: raw.cwd,
 				argv: options.argv,
 				transcript_path: raw.transcriptPath,
 			});
-			state.note("session", result.digest);
+			watcher.note("session", result.digest);
 			break;
 		}
-		case "pre-tool":
-			// Nothing is emitted before a tool runs; the post event carries both the
-			// input and the result, so one record describes the whole call.
-			break;
 		case "post-tool": {
 			const result = await client.submit({
-				...base("tool-call"),
+				...watcher.base("tool-call"),
 				tool_name: raw.toolName,
 				tool_input: raw.toolInput,
 				tool_output: raw.toolOutput,
 				is_error: raw.isError ?? false,
 			});
-			state.note("tool-call", result.digest);
-			await maybeSeal(raw.cwd, context, client, state);
+			watcher.note("tool-call", result.digest);
+			await watcher.check();
 			break;
 		}
 		case "session-end": {
-			await maybeSeal(raw.cwd, context, client, state);
-			if (state.captured.length > 0) {
-				// Work that never became a commit is retained in a terminal segment.
-				// CLC-001.3.4.
-				await client.submit({
-					...base("session"),
-					terminal: true,
-					uncommitted: true,
-					segment: state.digests,
-					captured: state.captured,
-				});
-				state.reset();
-			}
+			await watcher.check();
+			await watcher.finish();
 			break;
 		}
 	}
@@ -116,65 +102,33 @@ export async function runHook(raw: NormalizedEvent, options: HookOptions): Promi
 	await state.save();
 }
 
+export interface StdinHookOptions<T> extends Omit<HookOptions, "eventSurface" | "argv"> {
+	/** Maps this harness's payload onto the shared event shape. */
+	normalize(payload: T): NormalizedEvent | null;
+	/** Reads the harness's own name for the event, for `event_surface`. */
+	eventName(payload: T): string;
+}
+
 /**
- * Observes git rather than trusting the agent to announce its commits.
- * CLC-001.1.6, CLC-001.3.2.
+ * Read one hook payload from stdin, forward it, exit 0.
+ *
+ * Both command-hook collectors are this plus a `normalize`. Sharing it is what
+ * keeps the wire records identical when a new event or field is added, rather
+ * than requiring two files to be edited in step.
  */
-async function maybeSeal(
-	cwd: string,
-	context: CollectorContext,
-	client: PensieveClient,
-	state: SessionState,
-): Promise<void> {
-	const now = await head(cwd);
-	if (!now || now === state.lastHead) return;
-	const previous = state.lastHead;
-	state.setHead(now);
-
-	const info = await commitInfo(cwd, now);
-	if (!info) return;
-
-	const shared = {
-		run: context.run,
-		attempt: context.attempt,
-		identity: context.identity,
-		environment: context.environment,
-		policy_digest: context.policy_digest,
-		install_scope: context.install_scope,
-		harness: context.harness,
-	};
-
-	// History rewritten in-session is recorded where it happened. CLC-001.3.6.
-	if (previous && !info.parents.includes(previous)) {
-		await client.submit({
-			...shared,
-			kind: "derivation",
-			created_at: new Date().toISOString(),
-			from: previous,
-			to: now,
-			performed_in: "session",
+export async function runStdinHook<T>(options: StdinHookOptions<T>): Promise<never> {
+	const payload = JSON.parse(await Bun.stdin.text()) as T;
+	const event = options.normalize(payload);
+	if (event) {
+		await runHook(event, {
+			harness: options.harness,
+			harnessVersion: options.harnessVersion,
+			unsupported: options.unsupported,
+			eventSurface: `hook:${options.eventName(payload)}`,
+			argv: Bun.argv.slice(2),
 		});
 	}
-
-	const missing = context.profile.required.filter((kind) => !state.captured.includes(kind));
-	const unsupported = context.profile.unsupported.filter((kind) => context.profile.required.includes(kind));
-	const gaps = [...new Set([...missing, ...unsupported])];
-
-	await client.submit({
-		...shared,
-		kind: "commit-evidence",
-		created_at: new Date().toISOString(),
-		sha: info.sha,
-		tree: info.tree,
-		parents: info.parents,
-		patch_id: info.patch_id,
-		segment: state.digests,
-		capture: {
-			profile: context.profile.name,
-			required: context.profile.required,
-			captured: state.captured,
-			gaps,
-		},
-	});
-	state.reset();
+	// Exit 0 without JSON: these hooks observe, they never block. Collection that
+	// can stop a session is collection an operator will switch off.
+	process.exit(0);
 }

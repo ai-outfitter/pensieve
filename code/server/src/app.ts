@@ -66,20 +66,17 @@ export async function createApp(config: Config): Promise<App> {
 			return Response.json(result, { status: 201 });
 		}
 
-		const recordMatch = /^\/v0\/records\/([0-9a-f]{64})$/.exec(path);
-		if (recordMatch?.[1] && method === "GET") {
-			const record = await sink.readRecord(recordMatch[1]);
-			return record ? Response.json(record) : problem(404, "no such record");
-		}
+		if (method === "GET") {
+			const record = hexParam(path, "records", 64);
+			if (record) {
+				const found = await sink.readRecord(record);
+				return found ? Response.json(found) : problem(404, "no such record");
+			}
+			const commit = hexParam(path, "commits", 40);
+			if (commit) return Response.json(await sink.commitCoverage(commit));
 
-		const commitMatch = /^\/v0\/commits\/([0-9a-f]{40})$/.exec(path);
-		if (commitMatch?.[1] && method === "GET") {
-			return Response.json(await sink.commitCoverage(commitMatch[1]));
-		}
-
-		const patchMatch = /^\/v0\/patches\/([0-9a-f]{40})$/.exec(path);
-		if (patchMatch?.[1] && method === "GET") {
-			return Response.json({ matches: sink.coverageByPatchId(patchMatch[1]) });
+			const patch = hexParam(path, "patches", 40);
+			if (patch) return Response.json({ matches: sink.coverageByPatchId(patch) });
 		}
 
 		if (path === "/v0/coverage" && method === "POST") {
@@ -110,6 +107,14 @@ export async function createApp(config: Config): Promise<App> {
 			}
 		},
 	};
+}
+
+/** `/v0/<resource>/<hex id>`, or null when the path is not that shape. */
+function hexParam(path: string, resource: string, length: number): string | null {
+	const segments = path.split("/");
+	if (segments.length !== 4 || segments[1] !== "v0" || segments[2] !== resource) return null;
+	const id = segments[3];
+	return id && id.length === length && /^[0-9a-f]+$/.test(id) ? id : null;
 }
 
 /** A rejection returns a typed error the collector can act on. SRV-001.11.5. */

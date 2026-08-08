@@ -1,5 +1,6 @@
 /** Where the collector was installed. Recorded on every session record. CLC-001.2.3. */
-export type InstallScope = "managed" | "launcher" | "user" | "project" | "session";
+export const INSTALL_SCOPES = ["managed", "launcher", "user", "project", "session"] as const;
+export type InstallScope = (typeof INSTALL_SCOPES)[number];
 
 export type RecordKind =
 	| "session"

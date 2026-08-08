@@ -68,7 +68,6 @@ export interface CommitEvidenceRecord extends BaseRecord {
 	patch_id: string;
 	segment: string[];
 	capture: CaptureReport;
-	status: "sealed" | "failed-evidence";
 }
 
 export type Attribution = "run" | "forge-generated" | "human" | "exempt" | "unattested";
@@ -201,8 +200,18 @@ function validateCommitEvidence(record: Record<string, unknown>): void {
 	if (!capture || !Array.isArray(capture.required) || !Array.isArray(capture.gaps)) {
 		throw new RecordError("commit-evidence.capture must declare required and gaps");
 	}
-	// An unmet required class seals the record failed-evidence. SRV-001.4.5.
-	record.status = capture.gaps.length > 0 ? "failed-evidence" : "sealed";
+}
+
+/**
+ * An unmet required class seals the record failed-evidence. SRV-001.4.5.
+ *
+ * Derived on read rather than written onto the record: validation must not
+ * edit the document it is validating, or the bytes the sink stores are not the
+ * bytes the collector composed and no collector could precompute its own
+ * record digest.
+ */
+export function sealStatus(capture: CaptureReport): "sealed" | "failed-evidence" {
+	return capture.gaps.length > 0 ? "failed-evidence" : "sealed";
 }
 
 function validateLanding(record: Record<string, unknown>): void {
@@ -230,5 +239,3 @@ function validateReleaseBundle(record: Record<string, unknown>): void {
 	}
 	if (!Array.isArray(record.commits)) throw new RecordError("release-bundle.commits must be an array");
 }
-
-export const ZERO_OBJECT = ZERO_SHA;

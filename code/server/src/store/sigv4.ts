@@ -1,4 +1,5 @@
-import { createHash, createHmac } from "node:crypto";
+import { createHmac } from "node:crypto";
+import { sha256Hex } from "../canonical.ts";
 
 /**
  * Minimal AWS Signature Version 4 for S3.
@@ -31,10 +32,6 @@ function hmac(key: Uint8Array | string, data: string): Uint8Array {
 	return new Uint8Array(createHmac("sha256", key).update(data).digest());
 }
 
-function hexSha256(data: Uint8Array | string): string {
-	return createHash("sha256").update(data).digest("hex");
-}
-
 /** S3 requires each path segment encoded, but not the separators. */
 function canonicalUri(pathname: string): string {
 	return pathname
@@ -56,7 +53,7 @@ export function signRequest(request: SignableRequest, credentials: SigV4Credenti
 	const now = new Date();
 	const amzDate = `${now.toISOString().replace(/[-:]/g, "").slice(0, 15)}Z`;
 	const dateStamp = amzDate.slice(0, 8);
-	const payloadHash = hexSha256(request.body ?? new Uint8Array());
+	const payloadHash = sha256Hex(request.body ?? new Uint8Array());
 
 	const headers: Record<string, string> = {
 		...request.headers,
@@ -88,7 +85,7 @@ export function signRequest(request: SignableRequest, credentials: SigV4Credenti
 		"AWS4-HMAC-SHA256",
 		amzDate,
 		scope,
-		hexSha256(canonicalRequest),
+		sha256Hex(canonicalRequest),
 	].join("\n");
 
 	let signingKey = hmac(`AWS4${credentials.secretAccessKey}`, dateStamp);

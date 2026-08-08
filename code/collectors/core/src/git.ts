@@ -1,7 +1,7 @@
 import type { CommitInfo } from "./types.ts";
 
 async function git(cwd: string, args: string[]): Promise<string | null> {
-	const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+	const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "ignore" });
 	const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
 	return code === 0 ? out.trim() : null;
 }
@@ -19,7 +19,7 @@ export async function patchId(cwd: string, sha: string): Promise<string> {
 	const proc = Bun.spawn(["sh", "-c", `git show ${sha} | git patch-id --stable`], {
 		cwd,
 		stdout: "pipe",
-		stderr: "pipe",
+		stderr: "ignore",
 	});
 	const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
 	if (code !== 0) return "";
@@ -27,8 +27,10 @@ export async function patchId(cwd: string, sha: string): Promise<string> {
 }
 
 export async function commitInfo(cwd: string, sha: string): Promise<CommitInfo | null> {
-	const tree = await git(cwd, ["rev-parse", `${sha}^{tree}`]);
+	// Tree and parents come from one `git show`, not two round trips.
+	const summary = await git(cwd, ["show", "-s", "--format=%T %P", sha]);
+	if (!summary) return null;
+	const [tree, ...parents] = summary.split(/\s+/).filter(Boolean);
 	if (!tree) return null;
-	const parents = (await git(cwd, ["rev-list", "--parents", "-n", "1", sha]))?.split(/\s+/).slice(1) ?? [];
 	return { sha, tree, parents, patch_id: await patchId(cwd, sha) };
 }

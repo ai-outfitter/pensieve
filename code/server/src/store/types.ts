@@ -27,6 +27,7 @@ export interface Store {
 	/** True when this backend can prove a write-once lock. SRV-001.5.9. */
 	readonly conforming: boolean;
 	put(key: string, body: Uint8Array, options: { contentType: string; retainUntil?: Date }): Promise<PutResult>;
+	/** Object metadata, for the availability check SRV-001.5.10 requires of a verifier. */
 	head(key: string): Promise<HeadResult | null>;
 	get(key: string): Promise<Uint8Array | null>;
 	getRetention(key: string): Promise<Retention | null>;

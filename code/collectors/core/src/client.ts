@@ -17,11 +17,21 @@ export interface ClientOptions {
  * forwards through a third party. CLC-001.6.
  */
 export class PensieveClient {
+	private spoolReady: Promise<string> | undefined;
+	/**
+	 * Disambiguates records spooled inside the same millisecond. Without it the
+	 * filename sort falls through to a random UUID, and two records written in
+	 * the same tick can be delivered out of submission order — which is exactly
+	 * the guarantee CLC-001.6.3 makes.
+	 */
+	private sequence = 0;
+
 	constructor(private readonly options: ClientOptions) {}
 
-	private async spoolPath(): Promise<string> {
-		await mkdir(this.options.spool, { recursive: true });
-		return this.options.spool;
+	/** One mkdir per client, not one per record. */
+	private spoolPath(): Promise<string> {
+		this.spoolReady ??= mkdir(this.options.spool, { recursive: true }).then(() => this.options.spool);
+		return this.spoolReady;
 	}
 
 	/**
@@ -32,9 +42,14 @@ export class PensieveClient {
 	 */
 	async submit(record: EvidenceRecord): Promise<{ delivered: boolean; digest?: string }> {
 		const dir = await this.spoolPath();
-		// Monotonic prefix so lexical sort is chronological across a restart.
-		const name = `${Date.now().toString().padStart(14, "0")}-${crypto.randomUUID()}.json`;
+		// Monotonic prefix so lexical sort is chronological: milliseconds order
+		// across processes and restarts, the sequence orders within one tick.
+		const stamp = Date.now().toString().padStart(14, "0");
+		const seq = (this.sequence++).toString().padStart(6, "0");
+		const name = `${stamp}-${seq}-${crypto.randomUUID()}.json`;
 		const path = join(dir, name);
+		// The spooled bytes are the bytes sent, so a record is serialized once
+		// whether it goes out now or after a recovery.
 		await Bun.write(path, JSON.stringify(record));
 
 		const delivered = await this.drain();
@@ -52,14 +67,14 @@ export class PensieveClient {
 		const delivered = new Map<string, string>();
 		for (const name of names) {
 			const path = join(dir, name);
-			let record: EvidenceRecord;
+			let body: string;
 			try {
-				record = (await Bun.file(path).json()) as EvidenceRecord;
+				body = await Bun.file(path).text();
 			} catch {
 				continue;
 			}
 			try {
-				const digest = await this.post(this.options.sink, this.options.token, record);
+				const digest = await this.post(this.options.sink, this.options.token, body);
 				await unlink(path);
 				delivered.set(path, digest);
 			} catch {
@@ -70,15 +85,15 @@ export class PensieveClient {
 		return delivered;
 	}
 
-	private async post(sink: string, token: string, record: EvidenceRecord): Promise<string> {
+	private async post(sink: string, token: string, body: string): Promise<string> {
 		const response = await fetch(`${sink.replace(/\/$/, "")}/v0/records`, {
 			method: "POST",
 			headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-			body: JSON.stringify(record),
+			body,
 		});
 		if (!response.ok) throw new Error(`sink rejected record: ${response.status} ${await response.text()}`);
-		const body = (await response.json()) as { digest: string };
-		return body.digest;
+		const accepted = (await response.json()) as { digest: string };
+		return accepted.digest;
 	}
 
 	/**
@@ -96,7 +111,7 @@ export class PensieveClient {
 			reason: error instanceof Error ? error.message : String(error),
 		};
 		try {
-			await this.post(this.options.emergencySink, this.options.emergencyToken, failure);
+			await this.post(this.options.emergencySink, this.options.emergencyToken, JSON.stringify(failure));
 		} catch {
 			// The emergency path is the last resort. The spooled record remains on
 			// disk, so nothing is lost even when both sinks are unreachable.

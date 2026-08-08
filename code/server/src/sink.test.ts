@@ -13,7 +13,6 @@ async function app() {
 		sinkId: "test.sink",
 		indexPath: ":memory:",
 		retentionFloorDays: 7,
-		bundleFreshnessDays: 30,
 		devAuth: true,
 		store: { kind: "filesystem", root },
 	};

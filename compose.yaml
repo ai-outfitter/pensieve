@@ -55,6 +55,9 @@ services:
     environment:
       PORT: "4319"
       PENSIEVE_SINK_ID: pensieve.local
+      # Declared, not inferred: a partial S3 configuration fails at startup
+      # rather than silently falling back to the non-conforming dev store.
+      PENSIEVE_STORE: s3
       PENSIEVE_S3_ENDPOINT: http://minio:9000
       PENSIEVE_S3_BUCKET: pensieve
       PENSIEVE_S3_REGION: us-east-1

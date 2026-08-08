@@ -1,8 +1,9 @@
-import { recordDigest, sha256Hex } from "./canonical.ts";
-import { RecordIndex } from "./db.ts";
+import { canonicalize, sha256Hex } from "./canonical.ts";
+import { RecordIndex, type IndexedRecord } from "./db.ts";
 import type { Signer, StorageStatement } from "./identity.ts";
 import {
 	isAuthoritativeScope,
+	sealStatus,
 	validateRecord,
 	type BaseRecord,
 	type CommitEvidenceRecord,
@@ -11,6 +12,32 @@ import {
 	type ReleaseBundleRecord,
 } from "./records.ts";
 import type { Store } from "./store/types.ts";
+
+const ENCODER = new TextEncoder();
+const DECODER = new TextDecoder();
+
+/**
+ * Which columns each kind contributes to the lookup index. A per-kind
+ * projection keeps one column from meaning two things: `sha` is always the
+ * commit a record covers, and a landing's new ref head has its own column.
+ */
+function projectForIndex(record: BaseRecord): Omit<IndexedRecord, "digest" | "kind" | "run" | "identity" | "created_at"> {
+	const empty = { sha: null, patch_id: null, ref: null, ref_head: null, tag: null, status: null };
+	switch (record.kind) {
+		case "commit-evidence": {
+			const commit = record as CommitEvidenceRecord;
+			return { ...empty, sha: commit.sha, patch_id: commit.patch_id, status: sealStatus(commit.capture) };
+		}
+		case "landing": {
+			const landing = record as LandingRecord;
+			return { ...empty, ref: landing.ref, ref_head: landing.after };
+		}
+		case "release-bundle":
+			return { ...empty, tag: (record as ReleaseBundleRecord).tag };
+		default:
+			return empty;
+	}
+}
 
 export interface Principal {
 	identity: string;
@@ -95,8 +122,11 @@ export class Sink {
 			throw new AuthError("agent work must not be attributed to a human account", 403);
 		}
 
-		const digest = recordDigest(record);
-		const bytes = new TextEncoder().encode(JSON.stringify(record));
+		// Canonicalize once, encode once, hash once. The bytes written to the
+		// store are the bytes that were digested, so a verifier that fetches the
+		// object re-derives the same digest without re-canonicalizing.
+		const bytes = ENCODER.encode(canonicalize(record));
+		const digest = sha256Hex(bytes);
 		const put = await this.store.put(`records/${digest.slice(0, 2)}/${digest}.json`, bytes, {
 			contentType: "application/json",
 			retainUntil: this.retainUntil(),
@@ -104,7 +134,11 @@ export class Sink {
 
 		const unsigned: StorageStatement = {
 			record_digest: digest,
-			content_digest: sha256Hex(bytes),
+			// Equal by construction: the object written to the store IS the
+			// canonical serialization the digest was taken over. Both fields stay,
+			// because SRV-001.5.4 binds both and a future backend that transforms
+			// the payload at rest would make them differ again.
+			content_digest: digest,
 			locator: put.locator,
 			object_version: put.version,
 			sink: this.signer.identity.id,
@@ -126,15 +160,7 @@ export class Sink {
 			run: record.run,
 			identity: record.identity,
 			created_at: record.created_at,
-			// For a landing, `sha` indexes the ref's new head, so the next update's
-			// `before` can be compared against it. SRV-001.7.10.
-			sha:
-				(record as Partial<CommitEvidenceRecord>).sha ??
-				(record.kind === "landing" ? (record as LandingRecord).after : null),
-			patch_id: (record as Partial<CommitEvidenceRecord>).patch_id ?? null,
-			ref: (record as Partial<LandingRecord>).ref ?? null,
-			tag: (record as Partial<ReleaseBundleRecord>).tag ?? null,
-			status: (record as Partial<CommitEvidenceRecord>).status ?? null,
+			...projectForIndex(record),
 		});
 
 		if (record.kind === "landing") this.checkChain(record as LandingRecord, digest);
@@ -154,28 +180,25 @@ export class Sink {
 	 * that ref is a chain break. SRV-001.7.10.
 	 */
 	private checkChain(record: LandingRecord, digest: string): void {
-		const chain = this.index.landingsForRef(record.ref).filter((entry) => entry.digest !== digest);
-		const previous = chain.at(-1);
-		if (previous && previous.sha && previous.sha !== record.before) {
+		const previous = this.index
+			.landingsForRef(record.ref)
+			.filter((entry) => entry.digest !== digest)
+			.at(-1);
+
+		const broken = Boolean(previous?.ref_head && previous.ref_head !== record.before) || Boolean(record.chain_break);
+		if (broken) {
 			this.index.addFinding(
 				"chain-break",
 				record.ref,
-				`expected before=${previous.sha}, received before=${record.before}`,
+				`expected before=${previous?.ref_head ?? "unknown"}, received before=${record.before}`,
 			);
 		}
-		if (record.chain_break) this.index.addFinding("chain-break", record.ref, `before=${record.before}`);
 		if (record.history_rewrite) {
 			this.index.addFinding("history-rewrite", record.ref, `${record.before} -> ${record.after}`);
 		}
-		if (record.landed.some((entry) => entry.attribution === "unattested")) {
-			this.index.addFinding(
-				"unattested-commit",
-				record.ref,
-				record.landed
-					.filter((entry) => entry.attribution === "unattested")
-					.map((entry) => entry.sha)
-					.join(","),
-			);
+		const unattested = record.landed.filter((entry) => entry.attribution === "unattested");
+		if (unattested.length > 0) {
+			this.index.addFinding("unattested-commit", record.ref, unattested.map((entry) => entry.sha).join(","));
 		}
 	}
 
@@ -187,9 +210,8 @@ export class Sink {
 	async readRecord(digest: string): Promise<BaseRecord | null> {
 		const bytes = await this.store.get(`records/${digest.slice(0, 2)}/${digest}.json`);
 		if (!bytes) return null;
-		const parsed = JSON.parse(new TextDecoder().decode(bytes)) as BaseRecord;
-		if (recordDigest(parsed) !== digest) throw new Error(`record ${digest} failed digest verification`);
-		return parsed;
+		if (sha256Hex(bytes) !== digest) throw new Error(`record ${digest} failed digest verification`);
+		return JSON.parse(DECODER.decode(bytes)) as BaseRecord;
 	}
 
 	/** SRV-001.10.1. */
@@ -198,14 +220,15 @@ export class Sink {
 		if (exact) {
 			const record = (await this.readRecord(exact.digest)) as CommitEvidenceRecord | null;
 			if (!record) return { sha, covered: false, reason: "record missing from store" };
-			const failed = record.status === "failed-evidence";
+			const status = sealStatus(record.capture);
+			const failed = status === "failed-evidence";
 			return {
 				sha,
 				covered: !failed,
 				reason: failed ? "failed-evidence: required capture class missing" : "sealed commit evidence",
 				evidence: exact.digest,
 				match: "exact",
-				status: record.status,
+				status,
 			};
 		}
 		return { sha, covered: false, reason: "no commit evidence for this SHA" };
@@ -225,8 +248,9 @@ export class Sink {
 
 	/** Returns the uncovered set, not a boolean alone. SRV-001.10.2. */
 	async rangeCoverage(shas: string[]): Promise<{ covered: boolean; entries: CoverageEntry[]; uncovered: string[] }> {
-		const entries: CoverageEntry[] = [];
-		for (const sha of shas) entries.push(await this.commitCoverage(sha));
+		// Per-commit lookups are independent and each may be a store round trip,
+		// so a release range resolves concurrently rather than serially.
+		const entries = await Promise.all(shas.map((sha) => this.commitCoverage(sha)));
 		const uncovered = entries.filter((entry) => !entry.covered).map((entry) => entry.sha);
 		return { covered: uncovered.length === 0, entries, uncovered };
 	}
