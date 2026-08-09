@@ -26,7 +26,18 @@ interface ClaudeHookPayload {
 	transcript_path?: string;
 	tool_name?: string;
 	tool_input?: unknown;
+	/**
+	 * Which name Claude Code uses for the post-tool result is NOT settled. This
+	 * collector was written against `tool_output`, but the field is plausibly
+	 * `tool_response`, as it is in Codex, and no capture of a real payload has
+	 * confirmed either. Reading whichever is present costs nothing and is
+	 * correct under both — guessing wrong records a tool call with no result,
+	 * which is a hollow record that still seals green.
+	 *
+	 * Replace this with the single real field once a live payload is captured.
+	 */
 	tool_output?: unknown;
+	tool_response?: unknown;
 }
 
 await runStdinHook<ClaudeHookPayload>({
@@ -46,17 +57,24 @@ await runStdinHook<ClaudeHookPayload>({
 			case "PreToolUse":
 				return { phase: "pre-tool", toolName: payload.tool_name, toolInput: payload.tool_input, ...shared };
 			case "PostToolUse":
-			case "PostToolUseFailure":
+			case "PostToolUseFailure": {
+				const output = payload.tool_response ?? payload.tool_output;
 				return {
 					phase: "post-tool",
 					toolName: payload.tool_name,
 					toolInput: payload.tool_input,
-					toolOutput: payload.tool_output,
-					// Both events map to one phase, so the failure must be marked or the
-					// record would be indistinguishable from a success. CLC-001.1.5.
-					isError: payload.hook_event_name === "PostToolUseFailure",
+					toolOutput: output,
+					// Two independent signals, because neither is confirmed. Whether
+					// `PostToolUseFailure` is a real Claude Code event is unverified; if
+					// it is not, failures arrive as ordinary PostToolUse and only the
+					// payload shape distinguishes them. Marking on either signal is
+					// correct if one is right and harmless if both are.
+					isError:
+						payload.hook_event_name === "PostToolUseFailure" ||
+						Boolean((output as { error?: unknown } | undefined)?.error),
 					...shared,
 				};
+			}
 			case "SessionEnd":
 				return { phase: "session-end", ...shared };
 			default:

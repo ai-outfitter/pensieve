@@ -3,3 +3,5 @@ dist/
 *.sqlite
 *.sqlite-*
 .env
+demo/
+manim/
