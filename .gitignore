@@ -5,3 +5,6 @@ dist/
 .env
 demo/
 manim/
+
+# Delegation scratchpad, per the subagent-delegation skill.
+TASKS.md
