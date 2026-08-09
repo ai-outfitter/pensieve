@@ -7,7 +7,7 @@ import { INSTALL_SCOPES, type CaptureProfile, type CollectorContext, type Instal
  * actually has — reporting an advisory installation as authoritative is
  * forbidden. CLC-001.2.3, CLC-001.2.4.
  */
-export function installScope(env = Bun.env): InstallScope {
+export function installScope(env = process.env): InstallScope {
 	const declared = env.PENSIEVE_INSTALL_SCOPE as InstallScope | undefined;
 	return declared && INSTALL_SCOPES.includes(declared) ? declared : "session";
 }
@@ -19,7 +19,7 @@ export function installScope(env = Bun.env): InstallScope {
  * require an edit to shared code to describe itself. CLC-001.1.7, CLC-001.7.2,
  * CLC-001.7.4.
  */
-export function profileFor(unsupported: RecordKind[], env = Bun.env): CaptureProfile {
+export function profileFor(unsupported: RecordKind[], env = process.env): CaptureProfile {
 	const required = (env.PENSIEVE_REQUIRED_CLASSES ?? "session,tool-call,patch,model-exchange")
 		.split(",")
 		.map((entry) => entry.trim())
@@ -38,7 +38,7 @@ export interface ContextOptions {
 	cwd: string;
 }
 
-export function buildContext(options: ContextOptions, env = Bun.env): CollectorContext {
+export function buildContext(options: ContextOptions, env = process.env): CollectorContext {
 	return {
 		run: options.run,
 		attempt: Number(env.PENSIEVE_ATTEMPT ?? 1),
@@ -54,7 +54,7 @@ export function buildContext(options: ContextOptions, env = Bun.env): CollectorC
 	};
 }
 
-export function clientOptions(env = Bun.env) {
+export function clientOptions(env = process.env) {
 	return {
 		sink: env.PENSIEVE_SINK ?? "http://localhost:4319",
 		token: env.PENSIEVE_TOKEN ?? "",

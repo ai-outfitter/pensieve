@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { RecordKind } from "./types.ts";
 
@@ -24,10 +24,13 @@ export class SessionState {
 	static async open(root: string, sessionId: string): Promise<SessionState> {
 		await mkdir(root, { recursive: true });
 		const path = join(root, `${sessionId.replace(/[^A-Za-z0-9_-]/g, "_")}.json`);
-		const file = Bun.file(path);
-		const snapshot: SessionSnapshot = (await file.exists())
-			? ((await file.json()) as SessionSnapshot)
-			: { captured: [], digests: [], lastHead: null, startedAt: new Date().toISOString() };
+		let snapshot: SessionSnapshot;
+		try {
+			snapshot = JSON.parse(await readFile(path, "utf8")) as SessionSnapshot;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			snapshot = { captured: [], digests: [], lastHead: null, startedAt: new Date().toISOString() };
+		}
 		return new SessionState(path, snapshot);
 	}
 
@@ -59,6 +62,6 @@ export class SessionState {
 	}
 
 	async save(): Promise<void> {
-		await Bun.write(this.path, JSON.stringify(this.snapshot));
+		await writeFile(this.path, JSON.stringify(this.snapshot));
 	}
 }

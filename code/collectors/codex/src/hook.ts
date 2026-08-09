@@ -31,7 +31,7 @@ interface CodexHookPayload {
 
 await runStdinHook<CodexHookPayload>({
 	harness: "codex",
-	harnessVersion: Bun.env.CODEX_VERSION ?? "unknown",
+	harnessVersion: process.env.CODEX_VERSION ?? "unknown",
 	unsupported: ["model-exchange"],
 	eventName: (payload) => payload.hook_event_name,
 	normalize(payload): NormalizedEvent | null {
