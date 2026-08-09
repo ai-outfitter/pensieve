@@ -2,7 +2,7 @@
 
 Pensieve collects what agents leave behind — session transcripts, tool calls, model exchanges, diffs, screenshots, logs, approvals, attestations — and writes it once into a store that cannot be rewritten. The default backend is S3 with Object Lock. The backend is an interface, not an assumption.
 
-Collection is not a wrapper you have to remember to run. Each harness gets a **collector**, shipped as an extension and installed at the system-root extension hook — the same install point an organization already uses to push Outfitter profiles from its `.agents` repository. If the org can install its catalog on a machine, it can install evidence collection on that machine, and the engineer running the agent does not have to opt in.
+Each harness gets a **collector**, but there is no shared Outfitter system-root extension hook that installs it. Claude Code and Codex expose their own managed hook configuration. Pi does not: its collector must be passed explicitly with `--extension`, and any current Pi install reports `launcher`, never `managed`.
 
 > **Status:** design stage, as of 2026-08-07. This README states the intended shape and the contracts the implementation has to satisfy. No code has been written yet. Commands shown below are illustrative.
 
@@ -80,7 +80,7 @@ New harnesses arrive as new collector plugins against a stable record contract. 
 
 ### Where collectors get installed
 
-Organizations already have an answer to "how does every machine get the same agent configuration": a system-root install of the org's `.agents` catalog, placed where an engineer does not edit it and does not remove it. Harnesses expose exactly this scope. Claude Code, for example, reads a managed policy file before any user or project file:
+Collector installation is harness-specific. Claude Code, for example, reads a managed policy file before any user or project file:
 
 | Platform | Managed policy location |
 | --- | --- |
@@ -90,9 +90,9 @@ Organizations already have an answer to "how does every machine get the same age
 
 Source: [Claude Code memory — choose where to put your CLAUDE.md files](https://code.claude.com/docs/en/memory#choose-where-to-put-claude-md-files).
 
-Pensieve rides that same channel. The property that matters is not the specific path but the ordering: the collector is installed by whoever owns the machine, ahead of anything the session can change. Evidence collection an agent can turn off is evidence collection that will be reported as complete on the runs where it was off.
+Pensieve uses a managed channel where a harness actually provides one. The property that matters is not the specific path but the ordering: the collector is installed by whoever owns the machine, ahead of anything the session can change. Evidence collection an agent can turn off must not be presented as authoritative.
 
-That ordering does not hold on every harness. Claude Code and Codex both have a managed scope a session cannot override; Pi resolves configuration only from user and project scope, so its collector is authoritative only where the machine offers a wrapped launcher rather than a bare `pi`. Every collector therefore records its own install scope, and a verifier reads that scope to decide whether collection was authoritative or advisory — see [CLC-001.2](./docs/requirements/CLC-001-harness-collectors.md).
+That ordering does not hold on every harness. Claude Code and Codex both have a managed scope a session cannot override. Pi resolves configuration only from user and project scope, so the current installer creates a root-owned `/usr/local/bin/pi` wrapper and reports `launcher`, never `managed`. That wrapper affects direct `pi` invocations resolved through `PATH`; it does not affect `outfitter run`, because Outfitter launches its bundled Pi module with Node's `process.execPath` instead of looking up `pi` on `PATH`. An Outfitter deployment must explicitly pass the built Pi extension directory to its bundled Pi process. Every collector records its install scope so a verifier can decide whether collection was authoritative or advisory — see [CLC-001.2](./docs/requirements/CLC-001-harness-collectors.md).
 
 ## Capture completeness
 
