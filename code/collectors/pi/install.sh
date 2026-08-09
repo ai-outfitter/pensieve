@@ -11,10 +11,15 @@
 # verifier reads that and knows Pi collection on this machine was advisory.
 # Presenting it as authoritative is forbidden. CLC-001.2.4, CLC-001.2.7.
 #
-# Usage: install.sh <path-to-bundled-extension-js>
+# Usage: install.sh <path-to-bundled-extension-directory>
 set -eu
 
-EXTENSION="${1:?usage: install.sh <path-to-pi-extension.js>}"
+EXTENSION_DIR="${1:?usage: install.sh <path-to-pi-extension-directory>}"
+
+if [ ! -f "$EXTENSION_DIR/extension.js" ] || [ ! -f "$EXTENSION_DIR/package.json" ]; then
+	echo "extension directory must contain extension.js and package.json" >&2
+	exit 1
+fi
 
 if [ "$(id -u)" != "0" ]; then
 	echo "install.sh must run as root: the wrapper must sit where the session cannot rewrite it" >&2
@@ -45,7 +50,9 @@ if [ "$REAL_PI" = "/usr/local/bin/pi" ]; then
 	exit 0
 fi
 
-install -D -o root -g root -m 0644 "$EXTENSION" /opt/pensieve/collectors/pi/extension.js
+install -d -o root -g root -m 0755 /opt/pensieve/collectors/pi
+install -o root -g root -m 0644 "$EXTENSION_DIR/extension.js" /opt/pensieve/collectors/pi/extension.js
+install -o root -g root -m 0644 "$EXTENSION_DIR/package.json" /opt/pensieve/collectors/pi/package.json
 
 cat > /usr/local/bin/pi <<WRAPPER
 #!/usr/bin/env sh
@@ -54,7 +61,7 @@ cat > /usr/local/bin/pi <<WRAPPER
 # --no-extensions, is not collected — and the absence of a session record is
 # treated as unattested by the sink, never as clean. CLC-001.8.2.
 PENSIEVE_INSTALL_SCOPE=launcher \\
-exec ${REAL_PI} --extension /opt/pensieve/collectors/pi/extension.js "\$@"
+exec ${REAL_PI} --extension /opt/pensieve/collectors/pi "\$@"
 WRAPPER
 chown root:root /usr/local/bin/pi
 chmod 0755 /usr/local/bin/pi
