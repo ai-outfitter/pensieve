@@ -21,6 +21,10 @@ on:
 permissions:
   contents: read
   packages: write
+  # type=gha cache reads and writes the Actions cache. Without this scope the
+  # cache silently no-ops and every release re-runs the emulated arm64 install —
+  # a slow build that still succeeds, so nothing would surface the mistake.
+  actions: write
 
 jobs:
   publish:
@@ -44,6 +48,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The tag stays conventional (v0.1.0); the OCI version label must be strict
+      # semver, because chart appVersion updaters and scanners parse it as such.
+      - name: Derive the semver version from the release tag
+        run: echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
+
       - name: Build and publish immutable image
         uses: docker/build-push-action@v6
         with:
@@ -61,4 +70,4 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ env.RELEASE_TAG }}
+            org.opencontainers.image.version=${{ env.VERSION }}
