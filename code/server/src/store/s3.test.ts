@@ -4,6 +4,7 @@ import { RecordIndex } from "../db.ts";
 import { Signer } from "../identity.ts";
 import { Sink } from "../sink.ts";
 import { S3Store } from "./s3.ts";
+import { signRequest } from "./sigv4.ts";
 
 const OPTIONS = {
 	endpoint: "https://objects.example.test",
@@ -47,6 +48,41 @@ describe("S3 presigned PUT", () => {
 const integrationEndpoint = Bun.env.PENSIEVE_S3_TEST_ENDPOINT;
 const integrationTest = integrationEndpoint ? test : test.skip;
 
+/**
+ * Object Lock can only be enabled when a bucket is created, so a test that
+ * assumes a locked bucket already exists passes only on the machine that
+ * happened to make one. Create it here instead, and make it idempotent.
+ */
+async function ensureLockedBucket(options: {
+	endpoint: string;
+	bucket: string;
+	region: string;
+	accessKeyId: string;
+	secretAccessKey: string;
+}): Promise<void> {
+	const url = new URL(`${options.endpoint.replace(/\/$/, "")}/${options.bucket}`);
+	const headers = signRequest(
+		{
+			method: "PUT",
+			url,
+			headers: { "x-amz-bucket-object-lock-enabled": "true" },
+			body: new Uint8Array(),
+		},
+		{
+			accessKeyId: options.accessKeyId,
+			secretAccessKey: options.secretAccessKey,
+			region: options.region,
+			service: "s3",
+		},
+	);
+	const response = await fetch(url, { method: "PUT", headers, body: new Uint8Array() });
+	// Already ours, already locked — the only two acceptable non-2xx outcomes.
+	if (response.ok) return;
+	const text = await response.text();
+	if (/BucketAlreadyOwnedByYou|BucketAlreadyExists/.test(text)) return;
+	throw new Error(`could not create a lock-enabled bucket: ${response.status} ${text}`);
+}
+
 describe("S3 presigned PUT against object store", () => {
 	integrationTest("rejects checksum and lock tampering, then seals exact store metadata", async () => {
 		const store = new S3Store({
@@ -56,6 +92,14 @@ describe("S3 presigned PUT against object store", () => {
 			accessKeyId: Bun.env.PENSIEVE_S3_TEST_ACCESS_KEY_ID ?? "pensieve",
 			secretAccessKey: Bun.env.PENSIEVE_S3_TEST_SECRET_ACCESS_KEY ?? "pensieve-dev-secret",
 		});
+		await ensureLockedBucket({
+			endpoint: integrationEndpoint as string,
+			bucket: Bun.env.PENSIEVE_S3_TEST_BUCKET ?? "pensieve",
+			region: Bun.env.PENSIEVE_S3_TEST_REGION ?? "us-east-1",
+			accessKeyId: Bun.env.PENSIEVE_S3_TEST_ACCESS_KEY_ID ?? "pensieve",
+			secretAccessKey: Bun.env.PENSIEVE_S3_TEST_SECRET_ACCESS_KEY ?? "pensieve-dev-secret",
+		});
+
 		const bytes = new TextEncoder().encode(`presign integration ${crypto.randomUUID()}`);
 		const wrong = new Uint8Array(bytes.byteLength).fill(120);
 		const digest = sha256Hex(bytes);
