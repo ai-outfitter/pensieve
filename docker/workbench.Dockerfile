@@ -8,13 +8,13 @@
 # point of a managed install. CLC-001.2.1, CLC-001.2.2.
 FROM oven/bun:1 AS collectors
 WORKDIR /build
-COPY code/package.json code/bun.lock* ./
+COPY code/package.json code/bun.lock ./
 COPY code/server/package.json server/
 COPY code/collectors/core/package.json collectors/core/
 COPY code/collectors/claude/package.json collectors/claude/
 COPY code/collectors/codex/package.json collectors/codex/
 COPY code/collectors/pi/package.json collectors/pi/
-RUN bun install --frozen-lockfile || bun install
+RUN bun install --frozen-lockfile
 COPY code/ ./
 RUN sh scripts/build-collectors.sh dist
 

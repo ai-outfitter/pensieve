@@ -1,8 +1,10 @@
 name: release image
 
 on:
-  release:
-    types: [published]
+  # release-please.yml owns the release path and calls this workflow directly.
+  # Deliberately no `release: published` trigger — release-please creates the
+  # release with a PAT, and PAT-created events do start workflow runs, so that
+  # trigger would race a second identical build against this one.
   workflow_call:
     inputs:
       release_tag:
@@ -24,8 +26,8 @@ jobs:
   publish:
     runs-on: ubuntu-24.04
     env:
-      IMAGE: ghcr.io/ai-outfitter/pensieve
-      RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
+      IMAGE: ghcr.io/${{ github.repository }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
     steps:
       - uses: actions/checkout@v6
 
@@ -49,6 +51,10 @@ jobs:
           file: code/server/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          # The arm64 leg builds under QEMU, so caching the dependency stage is
+          # what keeps a release build from re-running an emulated bun install.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: |
             ${{ env.IMAGE }}:${{ env.RELEASE_TAG }}
             ${{ env.IMAGE }}:sha-${{ github.sha }}

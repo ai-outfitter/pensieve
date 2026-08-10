@@ -1,11 +1,10 @@
 {
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
   "packages": {
     ".": {
       "release-type": "simple",
       "package-name": "pensieve",
-      "include-v-in-tag": true,
-      "bump-minor-pre-major": true,
-      "changelog-path": "CHANGELOG.md"
+      "bump-minor-pre-major": true
     }
   }
 }
