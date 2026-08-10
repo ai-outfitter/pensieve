@@ -66,6 +66,45 @@ export async function createApp(config: Config): Promise<App> {
 			return Response.json(result, { status: 201 });
 		}
 
+		if (path === "/v0/payloads/presign" && method === "POST") {
+			if (!principal.canWrite) return problem(403, "principal may not write evidence");
+			const body = (await request.json()) as Record<string, unknown>;
+			if (typeof body.digest !== "string" || !/^[0-9a-f]{64}$/.test(body.digest)) {
+				return problem(400, "digest must be a sha256 hex digest");
+			}
+			if (!Number.isSafeInteger(body.size) || (body.size as number) < 1) {
+				return problem(400, "size must be a positive safe integer");
+			}
+			// content_type becomes a signed header value in the presigned request, so a
+			// CR/LF or control character here is header injection into a URL the sink
+			// vouches for. Restrict it to the RFC 9110 media-type shape rather than
+			// only trimming, since a permissive filter is the wrong default here.
+			if (
+				typeof body.content_type !== "string" ||
+				body.content_type.length < 1 ||
+				body.content_type.length > 255 ||
+				!/^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(body.content_type)
+			) {
+				return problem(400, "content_type must be a media type of at most 255 characters");
+			}
+			return Response.json(
+				await sink.presignPayload({
+					digest: body.digest,
+					size: body.size as number,
+					contentType: body.content_type,
+				}),
+				{ status: 201 },
+			);
+		}
+
+		if (method === "POST") {
+			const digest = payloadSealParam(path);
+			if (digest) {
+				if (!principal.canWrite) return problem(403, "principal may not write evidence");
+				return Response.json(await sink.sealPayload(digest), { status: 201 });
+			}
+		}
+
 		if (method === "GET") {
 			const record = hexParam(path, "records", 64);
 			if (record) {
@@ -115,6 +154,15 @@ function hexParam(path: string, resource: string, length: number): string | null
 	if (segments.length !== 4 || segments[1] !== "v0" || segments[2] !== resource) return null;
 	const id = segments[3];
 	return id && id.length === length && /^[0-9a-f]+$/.test(id) ? id : null;
+}
+
+function payloadSealParam(path: string): string | null {
+	const segments = path.split("/");
+	if (segments.length !== 5 || segments[1] !== "v0" || segments[2] !== "payloads" || segments[4] !== "seal") {
+		return null;
+	}
+	const digest = segments[3];
+	return digest && /^[0-9a-f]{64}$/.test(digest) ? digest : null;
 }
 
 /** A rejection returns a typed error the collector can act on. SRV-001.11.5. */

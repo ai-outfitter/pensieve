@@ -29,6 +29,14 @@ sh scripts/build-collectors.sh dist
 
 Verification reads records back from the store and re-derives their digests. It never returns a conclusion from the index.
 
+Opaque payloads can bypass the sink's data path when the S3 backend is active:
+
+1. `POST /v0/payloads/presign` with `{ digest, size, content_type }`.
+2. Send the bytes with the returned `PUT` method, URL, and exact headers.
+3. `POST /v0/payloads/<digest>/seal` to receive the signed payload statement.
+
+The five-minute capability binds the object key, SHA-256 checksum, content length and type, COMPLIANCE mode, and retain-until date. The seal reads the checksum, version, and retention back from the object store; it never substitutes the values used to create the URL. A durable client must request the URL while draining its spool, not when it first spools the payload. If a direct upload reports an expired signature, it requests a fresh URL and retries the same content-addressed payload. Records always continue through `/v0/records` so the sink can validate and index them.
+
 ## Collectors
 
 All three emit identical record shapes; only the install channel and the capture depth differ.

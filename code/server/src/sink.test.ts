@@ -153,6 +153,34 @@ describe("storage statements", () => {
 	});
 });
 
+describe("payload routes", () => {
+	test("validates a presign request before consulting the store", async () => {
+		const { handle } = await app();
+		const response = await handle(post("/v0/payloads/presign", { digest: "nope", size: 1, content_type: "text/plain" }));
+		expect(response.status).toBe(400);
+	});
+
+	test("does not grant upload capabilities to read-only principals", async () => {
+		const { handle } = await app();
+		const response = await handle(post(
+			"/v0/payloads/presign",
+			{ digest: "a".repeat(64), size: 1, content_type: "text/plain" },
+			"read:verifier",
+		));
+		expect(response.status).toBe(403);
+	});
+
+	test("reports that the development filesystem store cannot presign", async () => {
+		const { handle } = await app();
+		const response = await handle(post("/v0/payloads/presign", {
+			digest: "a".repeat(64),
+			size: 1,
+			content_type: "text/plain",
+		}));
+		expect(response.status).toBe(501);
+	});
+});
+
 describe("verification", () => {
 	// THIS TEST VALIDATES A HARD REQUIREMENT (SRV-001.10.5)
 	test("a record read back from the store re-derives its own digest", async () => {
