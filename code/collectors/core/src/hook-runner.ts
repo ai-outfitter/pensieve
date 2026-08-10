@@ -3,6 +3,7 @@ import { buildContext, clientOptions } from "./context.ts";
 import { CommitWatcher } from "./segment.ts";
 import { SessionState } from "./state.ts";
 import type { RecordKind } from "./types.ts";
+import { argv, env, stdin } from "node:process";
 
 /**
  * The harness-neutral event a collector forwards. Claude Code and Codex both
@@ -48,7 +49,7 @@ export async function runHook(raw: NormalizedEvent, options: HookOptions): Promi
 	if (raw.phase === "pre-tool") return;
 
 	const scope = scopeFromArgv(options.argv);
-	if (scope) Bun.env.PENSIEVE_INSTALL_SCOPE = scope;
+	if (scope) env.PENSIEVE_INSTALL_SCOPE = scope;
 
 	const context = buildContext(
 		{
@@ -59,10 +60,10 @@ export async function runHook(raw: NormalizedEvent, options: HookOptions): Promi
 			run: raw.sessionId,
 			cwd: raw.cwd,
 		},
-		Bun.env,
+		env,
 	);
-	const client = new PensieveClient(clientOptions(Bun.env));
-	const state = await SessionState.open(Bun.env.PENSIEVE_STATE ?? "/var/lib/pensieve/state", raw.sessionId);
+	const client = new PensieveClient(clientOptions(env));
+	const state = await SessionState.open(env.PENSIEVE_STATE ?? "/var/lib/pensieve/state", raw.sessionId);
 	const watcher = new CommitWatcher(context, client, state);
 
 	switch (raw.phase) {
@@ -117,7 +118,10 @@ export interface StdinHookOptions<T> extends Omit<HookOptions, "eventSurface" | 
  * than requiring two files to be edited in step.
  */
 export async function runStdinHook<T>(options: StdinHookOptions<T>): Promise<never> {
-	const payload = JSON.parse(await Bun.stdin.text()) as T;
+	stdin.setEncoding("utf8");
+	let input = "";
+	for await (const chunk of stdin) input += chunk;
+	const payload = JSON.parse(input) as T;
 	const event = options.normalize(payload);
 	if (event) {
 		await runHook(event, {
@@ -125,7 +129,7 @@ export async function runStdinHook<T>(options: StdinHookOptions<T>): Promise<nev
 			harnessVersion: options.harnessVersion,
 			unsupported: options.unsupported,
 			eventSurface: `hook:${options.eventName(payload)}`,
-			argv: Bun.argv.slice(2),
+			argv: argv.slice(2),
 		});
 	}
 	// Exit 0 without JSON: these hooks observe, they never block. Collection that

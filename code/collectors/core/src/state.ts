@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { RecordKind } from "./types.ts";
 
@@ -24,10 +24,21 @@ export class SessionState {
 	static async open(root: string, sessionId: string): Promise<SessionState> {
 		await mkdir(root, { recursive: true });
 		const path = join(root, `${sessionId.replace(/[^A-Za-z0-9_-]/g, "_")}.json`);
-		const file = Bun.file(path);
-		const snapshot: SessionSnapshot = (await file.exists())
-			? ((await file.json()) as SessionSnapshot)
-			: { captured: [], digests: [], lastHead: null, startedAt: new Date().toISOString() };
+		let snapshot: SessionSnapshot;
+		try {
+			snapshot = JSON.parse(await readFile(path, "utf8")) as SessionSnapshot;
+		} catch (error) {
+			// A missing file is a new session. A truncated or corrupt one — a crash
+			// during save — starts a new segment rather than killing the collector:
+			// a hook that throws stops collection for the whole session, and these
+			// hooks observe, they never block. The lost digests are not silently
+			// forgiven; the segment simply carries fewer captured classes, which the
+			// sink already reads as an unmet requirement rather than as clean.
+			// CLC-001.8.2.
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
+			snapshot = { captured: [], digests: [], lastHead: null, startedAt: new Date().toISOString() };
+		}
 		return new SessionState(path, snapshot);
 	}
 
@@ -59,6 +70,6 @@ export class SessionState {
 	}
 
 	async save(): Promise<void> {
-		await Bun.write(this.path, JSON.stringify(this.snapshot));
+		await writeFile(this.path, JSON.stringify(this.snapshot));
 	}
 }

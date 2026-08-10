@@ -42,7 +42,7 @@ interface ClaudeHookPayload {
 
 await runStdinHook<ClaudeHookPayload>({
 	harness: "claude-code",
-	harnessVersion: Bun.env.CLAUDE_CODE_VERSION ?? "unknown",
+	harnessVersion: process.env.CLAUDE_CODE_VERSION ?? "unknown",
 	unsupported: ["model-exchange"],
 	eventName: (payload) => payload.hook_event_name,
 	normalize(payload): NormalizedEvent | null {

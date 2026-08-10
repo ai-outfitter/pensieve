@@ -1,4 +1,4 @@
-import { mkdir, readdir, unlink } from "node:fs/promises";
+import { mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { EvidenceRecord } from "./types.ts";
 
@@ -50,7 +50,7 @@ export class PensieveClient {
 		const path = join(dir, name);
 		// The spooled bytes are the bytes sent, so a record is serialized once
 		// whether it goes out now or after a recovery.
-		await Bun.write(path, JSON.stringify(record));
+		await writeFile(path, JSON.stringify(record));
 
 		const delivered = await this.drain();
 		const digest = delivered.get(path);
@@ -69,7 +69,7 @@ export class PensieveClient {
 			const path = join(dir, name);
 			let body: string;
 			try {
-				body = await Bun.file(path).text();
+				body = await readFile(path, "utf8");
 			} catch {
 				continue;
 			}

@@ -31,17 +31,17 @@ export default function pensieveCollector(pi: ExtensionAPI): void {
 	const context = buildContext(
 		{
 			harness: "pi",
-			harnessVersion: Bun.env.PI_VERSION ?? "unknown",
+			harnessVersion: process.env.PI_VERSION ?? "unknown",
 			eventSurface: "extension:in-process",
 			// Pi is the only harness of the three that hands over the model request
 			// payload, so nothing is unsupported here. CLC-001.7.2.
 			unsupported: [],
-			run: Bun.env.PENSIEVE_RUN ?? crypto.randomUUID(),
+			run: process.env.PENSIEVE_RUN ?? crypto.randomUUID(),
 			cwd: process.cwd(),
 		},
-		Bun.env,
+		process.env,
 	);
-	const client = new PensieveClient(clientOptions(Bun.env));
+	const client = new PensieveClient(clientOptions(process.env));
 	// In-process, so segment state stays in memory; the command hooks pass a
 	// file-backed store to the same watcher.
 	const watcher = new CommitWatcher(context, client, new MemorySegmentStore());

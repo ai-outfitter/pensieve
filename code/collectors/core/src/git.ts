@@ -1,9 +1,16 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type { CommitInfo } from "./types.ts";
 
+const execFileAsync = promisify(execFile);
+
 async function git(cwd: string, args: string[]): Promise<string | null> {
-	const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "ignore" });
-	const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-	return code === 0 ? out.trim() : null;
+	try {
+		const { stdout } = await execFileAsync("git", args, { cwd });
+		return stdout.trim();
+	} catch {
+		return null;
+	}
 }
 
 export async function head(cwd: string): Promise<string | null> {
@@ -15,15 +22,16 @@ export async function head(cwd: string): Promise<string | null> {
  * commit carrying the same delta resolves to the same value, which is what
  * lets evidence survive history rewriting. CLC-001.3.2, SRV-001.4.2.
  */
+// Only the pipeline's final line — the patch id — is buffered by Node. `git show`
+// writes into the pipe to `git patch-id`, never into this process, so a large
+// commit cannot exhaust execFile's stdout buffer.
 export async function patchId(cwd: string, sha: string): Promise<string> {
-	const proc = Bun.spawn(["sh", "-c", `git show ${sha} | git patch-id --stable`], {
-		cwd,
-		stdout: "pipe",
-		stderr: "ignore",
-	});
-	const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-	if (code !== 0) return "";
-	return out.trim().split(/\s+/)[0] ?? "";
+	try {
+		const { stdout } = await execFileAsync("sh", ["-c", 'git show "$1" | git patch-id --stable', "sh", sha], { cwd });
+		return stdout.trim().split(/\s+/)[0] ?? "";
+	} catch {
+		return "";
+	}
 }
 
 export async function commitInfo(cwd: string, sha: string): Promise<CommitInfo | null> {
