@@ -75,8 +75,17 @@ export async function createApp(config: Config): Promise<App> {
 			if (!Number.isSafeInteger(body.size) || (body.size as number) < 1) {
 				return problem(400, "size must be a positive safe integer");
 			}
-			if (typeof body.content_type !== "string" || body.content_type.length < 1 || body.content_type.length > 255) {
-				return problem(400, "content_type must be a non-empty string of at most 255 characters");
+			// content_type becomes a signed header value in the presigned request, so a
+			// CR/LF or control character here is header injection into a URL the sink
+			// vouches for. Restrict it to the RFC 9110 media-type shape rather than
+			// only trimming, since a permissive filter is the wrong default here.
+			if (
+				typeof body.content_type !== "string" ||
+				body.content_type.length < 1 ||
+				body.content_type.length > 255 ||
+				!/^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(body.content_type)
+			) {
+				return problem(400, "content_type must be a media type of at most 255 characters");
 			}
 			return Response.json(
 				await sink.presignPayload({

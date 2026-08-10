@@ -28,9 +28,11 @@ export class FilesystemStore implements Store {
 	}
 
 	async head(key: string): Promise<HeadResult | null> {
-		const file = Bun.file(this.path(key));
+		const path = this.path(key);
+		const file = Bun.file(path);
 		if (!(await file.exists())) return null;
-		return { locator: `file://${this.path(key)}`, size: file.size, contentType: file.type };
+		// contentType is optional; an empty string is absence, not a value.
+		return { locator: `file://${path}`, size: file.size, contentType: file.type || undefined };
 	}
 
 	async get(key: string): Promise<Uint8Array | null> {

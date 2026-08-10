@@ -76,10 +76,13 @@ async function ensureLockedBucket(options: {
 		},
 	);
 	const response = await fetch(url, { method: "PUT", headers, body: new Uint8Array() });
-	// Already ours, already locked — the only two acceptable non-2xx outcomes.
 	if (response.ok) return;
 	const text = await response.text();
-	if (/BucketAlreadyOwnedByYou|BucketAlreadyExists/.test(text)) return;
+	// Only "already ours" is acceptable. BucketAlreadyExists means the name is
+	// taken by somebody else, and silently proceeding would run this test against
+	// a foreign bucket and report whatever that bucket's lock policy happens to
+	// be — a misleading pass.
+	if (/BucketAlreadyOwnedByYou/.test(text)) return;
 	throw new Error(`could not create a lock-enabled bucket: ${response.status} ${text}`);
 }
 
