@@ -61,7 +61,7 @@ cat > /usr/local/bin/pi <<WRAPPER
 # --no-extensions, is not collected — and the absence of a session record is
 # treated as unattested by the sink, never as clean. CLC-001.8.2.
 PENSIEVE_INSTALL_SCOPE=launcher \\
-exec ${REAL_PI} --extension /opt/pensieve/collectors/pi "\$@"
+exec "${REAL_PI}" --extension /opt/pensieve/collectors/pi "\$@"
 WRAPPER
 chown root:root /usr/local/bin/pi
 chmod 0755 /usr/local/bin/pi

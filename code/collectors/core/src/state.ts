@@ -28,7 +28,15 @@ export class SessionState {
 		try {
 			snapshot = JSON.parse(await readFile(path, "utf8")) as SessionSnapshot;
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			// A missing file is a new session. A truncated or corrupt one — a crash
+			// during save — starts a new segment rather than killing the collector:
+			// a hook that throws stops collection for the whole session, and these
+			// hooks observe, they never block. The lost digests are not silently
+			// forgiven; the segment simply carries fewer captured classes, which the
+			// sink already reads as an unmet requirement rather than as clean.
+			// CLC-001.8.2.
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
 			snapshot = { captured: [], digests: [], lastHead: null, startedAt: new Date().toISOString() };
 		}
 		return new SessionState(path, snapshot);

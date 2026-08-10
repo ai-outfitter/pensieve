@@ -22,6 +22,9 @@ export async function head(cwd: string): Promise<string | null> {
  * commit carrying the same delta resolves to the same value, which is what
  * lets evidence survive history rewriting. CLC-001.3.2, SRV-001.4.2.
  */
+// Only the pipeline's final line — the patch id — is buffered by Node. `git show`
+// writes into the pipe to `git patch-id`, never into this process, so a large
+// commit cannot exhaust execFile's stdout buffer.
 export async function patchId(cwd: string, sha: string): Promise<string> {
 	try {
 		const { stdout } = await execFileAsync("sh", ["-c", 'git show "$1" | git patch-id --stable', "sh", sha], { cwd });

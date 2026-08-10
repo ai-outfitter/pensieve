@@ -39,7 +39,10 @@ describe("Pi collector runtime", () => {
 				loaded.default({ on(name) { events.push(name); } });
 				console.log("invoked under node: " + events.join(","));
 			`;
-			const { stdout, stderr } = await execFileAsync("node", ["--input-type=module", "--eval", invoke]);
+			// The point of this test is Node, so the binary is required — but which node
+			// is not. An override keeps it runnable where bun is on PATH and node is not.
+			const nodeBinary = process.env.PENSIEVE_TEST_NODE ?? "node";
+			const { stdout, stderr } = await execFileAsync(nodeBinary, ["--input-type=module", "--eval", invoke]);
 
 			expect(stderr).not.toContain("ReferenceError");
 			expect(stdout).toContain("invoked under node: session_start");
