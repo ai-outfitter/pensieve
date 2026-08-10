@@ -10,7 +10,7 @@ COPY collectors/core/package.json collectors/core/
 COPY collectors/claude/package.json collectors/claude/
 COPY collectors/codex/package.json collectors/codex/
 COPY collectors/pi/package.json collectors/pi/
-RUN bun install --frozen-lockfile || bun install
+RUN bun install --frozen-lockfile
 
 FROM base AS runtime
 ENV NODE_ENV=production
