@@ -9,6 +9,11 @@ permissions:
   pull-requests: write
   issues: write
   packages: write
+  # A called workflow's permissions are the INTERSECTION of caller and callee.
+  # release-images.yml needs actions:write for its type=gha build cache, and a
+  # callee cannot grant itself a scope the caller lacks — GitHub rejects the
+  # whole workflow at startup, before any job runs.
+  actions: write
 
 jobs:
   release-please:
