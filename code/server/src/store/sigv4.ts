@@ -26,6 +26,13 @@ export interface SignableRequest {
 	body?: Uint8Array;
 }
 
+export interface PresignableRequest {
+	method: string;
+	url: URL;
+	headers: Record<string, string>;
+	expiresSeconds: number;
+}
+
 const UNSIGNED_HEADERS = new Set(["authorization", "content-length", "user-agent"]);
 
 function hmac(key: Uint8Array | string, data: string): Uint8Array {
@@ -100,4 +107,58 @@ export function signRequest(request: SignableRequest, credentials: SigV4Credenti
 		`AWS4-HMAC-SHA256 Credential=${credentials.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
 	);
 	return result;
+}
+
+/**
+ * Produce a query-authenticated SigV4 URL. Every supplied header is part of
+ * SignedHeaders; callers must return those exact values alongside the URL.
+ */
+export function presignRequest(
+	request: PresignableRequest,
+	credentials: SigV4Credentials,
+	now = new Date(),
+): URL {
+	if (!Number.isInteger(request.expiresSeconds) || request.expiresSeconds < 1 || request.expiresSeconds > 604_800) {
+		throw new Error("SigV4 expiry must be an integer from 1 through 604800 seconds");
+	}
+
+	const url = new URL(request.url);
+	const amzDate = `${now.toISOString().replace(/[-:]/g, "").slice(0, 15)}Z`;
+	const dateStamp = amzDate.slice(0, 8);
+	const scope = `${dateStamp}/${credentials.region}/${credentials.service}/aws4_request`;
+	const headers: Record<string, string> = { ...request.headers, host: url.host };
+	const signable = Object.entries(headers)
+		.map(([key, value]) => [key.toLowerCase(), value.trim().replace(/\s+/g, " ")] as const)
+		.sort(([a], [b]) => (a < b ? -1 : 1));
+	const signedHeaders = signable.map(([key]) => key).join(";");
+	const canonicalHeaders = signable.map(([key, value]) => `${key}:${value}\n`).join("");
+
+	url.searchParams.set("X-Amz-Algorithm", "AWS4-HMAC-SHA256");
+	url.searchParams.set("X-Amz-Credential", `${credentials.accessKeyId}/${scope}`);
+	url.searchParams.set("X-Amz-Date", amzDate);
+	url.searchParams.set("X-Amz-Expires", String(request.expiresSeconds));
+	url.searchParams.set("X-Amz-SignedHeaders", signedHeaders);
+	if (credentials.sessionToken) url.searchParams.set("X-Amz-Security-Token", credentials.sessionToken);
+
+	const canonicalRequest = [
+		request.method.toUpperCase(),
+		canonicalUri(url.pathname),
+		canonicalQuery(url),
+		canonicalHeaders,
+		signedHeaders,
+		"UNSIGNED-PAYLOAD",
+	].join("\n");
+	const stringToSign = [
+		"AWS4-HMAC-SHA256",
+		amzDate,
+		scope,
+		sha256Hex(canonicalRequest),
+	].join("\n");
+
+	let signingKey = hmac(`AWS4${credentials.secretAccessKey}`, dateStamp);
+	signingKey = hmac(signingKey, credentials.region);
+	signingKey = hmac(signingKey, credentials.service);
+	signingKey = hmac(signingKey, "aws4_request");
+	url.searchParams.set("X-Amz-Signature", Buffer.from(hmac(signingKey, stringToSign)).toString("hex"));
+	return url;
 }

@@ -1,6 +1,6 @@
 import { canonicalize, sha256Hex } from "./canonical.ts";
 import { RecordIndex, type IndexedRecord } from "./db.ts";
-import type { Signer, StorageStatement } from "./identity.ts";
+import type { PayloadStatement, Signer, StorageStatement } from "./identity.ts";
 import {
 	isAuthoritativeScope,
 	sealStatus,
@@ -11,10 +11,11 @@ import {
 	type LandingRecord,
 	type ReleaseBundleRecord,
 } from "./records.ts";
-import type { Store } from "./store/types.ts";
+import { StoreError, type Store } from "./store/types.ts";
 
 const ENCODER = new TextEncoder();
 const DECODER = new TextDecoder();
+const PRESIGN_EXPIRY_SECONDS = 5 * 60;
 
 /**
  * Which columns each kind contributes to the lookup index. A per-kind
@@ -97,6 +98,55 @@ export class Sink {
 			retainUntil: this.retainUntil(),
 		});
 		return { digest, locator: result.locator };
+	}
+
+	async presignPayload(input: { digest: string; size: number; contentType: string }) {
+		if (!this.store.presignPut) throw new StoreError("this store does not support presigned uploads", 501);
+		const key = `payloads/${input.digest.slice(0, 2)}/${input.digest}`;
+		return this.store.presignPut(key, {
+			digest: input.digest,
+			size: input.size,
+			contentType: input.contentType,
+			retainUntil: this.retainUntil(),
+			expiresSeconds: PRESIGN_EXPIRY_SECONDS,
+		});
+	}
+
+	async sealPayload(digest: string): Promise<{ digest: string; statement: PayloadStatement }> {
+		if (!this.store.presignPut) throw new StoreError("this store does not support presigned uploads", 501);
+		const key = `payloads/${digest.slice(0, 2)}/${digest}`;
+		const head = await this.store.head(key);
+		if (!head) throw new StoreError(`payload ${digest} does not exist`, 404);
+		if (!head.version) throw new StoreError(`payload ${digest} has no object version`, 409);
+		const expectedChecksum = Buffer.from(digest, "hex").toString("base64");
+		if (head.checksumSha256 !== expectedChecksum) {
+			throw new StoreError(`payload ${digest} failed checksum verification`, 409);
+		}
+		// Bind retention to the exact version returned by HEAD. A concurrent write
+		// must not make the statement combine metadata from two object versions.
+		const retention = await this.store.getRetention(key, head.version);
+		if (retention?.mode !== "COMPLIANCE") {
+			throw new StoreError(`payload ${digest} has no verified COMPLIANCE lock`, 409);
+		}
+		const unsigned: PayloadStatement = {
+			content_digest: digest,
+			locator: head.locator,
+			object_version: head.version,
+			size: head.size,
+			content_type: head.contentType,
+			sink: this.signer.identity.id,
+			key_id: this.signer.identity.key_id,
+			mechanism: this.store.kind,
+			// Whatever the STORE reported, never the value placed in the presign.
+			retain_until: retention.retain_until,
+			lock_verified: true,
+			conforming: this.conforming,
+			issued_at: new Date().toISOString(),
+		};
+		const statement: PayloadStatement = this.signer.identity.attested
+			? { ...unsigned, signature: await this.signer.sign(unsigned as unknown as Record<string, unknown>) }
+			: unsigned;
+		return { digest, statement };
 	}
 
 	/**

@@ -85,3 +85,20 @@ export interface StorageStatement {
 	issued_at: string;
 	signature?: string;
 }
+
+/** A signed receipt for an opaque payload, which has no record digest yet. */
+export interface PayloadStatement {
+	content_digest: string;
+	locator: string;
+	object_version?: string;
+	size: number;
+	content_type?: string;
+	sink: string;
+	key_id: string;
+	mechanism: string;
+	retain_until: string | null;
+	lock_verified: boolean;
+	conforming: boolean;
+	issued_at: string;
+	signature?: string;
+}
