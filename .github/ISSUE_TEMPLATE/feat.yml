@@ -1,0 +1,62 @@
+name: New capability or change
+description: >-
+  Request a new record shape, collector, backend, or a change to a stated
+  contract. The triage agent will label it and comment with a suggested plan.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: What does this touch?
+      options:
+        - The sink (record acceptance, content addressing, storage statements)
+        - A collector (per-harness capture)
+        - The verifier (pensieve verify)
+        - Storage backend and retention
+        - Record shapes and schemas
+        - Requirements or specification text
+        - Documentation
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What can you not prove today?
+      description: >-
+        The evidence question you cannot answer, not the solution you have in
+        mind. A request stated as a problem survives a better idea than yours.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What should it do?
+    validations:
+      required: true
+  - type: input
+    id: requirement
+    attributes:
+      label: Related requirement
+      description: >-
+        If this changes a stated obligation, name it. A change that contradicts
+        a requirement amends the requirement first.
+      placeholder: e.g. CICD-001.8
+    validations:
+      required: false
+  - type: dropdown
+    id: boundary
+    attributes:
+      label: Does this ask Pensieve to decide something?
+      description: >-
+        Pensieve stores evidence and proves storage. Whether a control fired,
+        whether a run is conformant, and what should be stored belong to the
+        governance layer. A request that crosses that line may still be right,
+        but it needs to say so.
+      options:
+        - "No — this is capture, storage, or proof of storage"
+        - "Yes — this asks Pensieve to judge or interpret a record"
+        - Not sure
+    validations:
+      required: true
