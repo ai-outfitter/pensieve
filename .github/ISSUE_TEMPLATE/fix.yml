@@ -1,0 +1,57 @@
+name: Something is broken
+description: >-
+  A contract, a stated requirement, or an implemented component is wrong,
+  inconsistent, or unimplementable as written. The triage agent will label it
+  and comment with a suggested plan.
+title: "fix: "
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: Which component?
+      options:
+        - The sink (record acceptance, content addressing, storage statements)
+        - A collector (per-harness capture)
+        - The verifier (pensieve verify)
+        - Storage backend and retention (Object Lock, lock deadlines)
+        - Requirements or specification text
+        - Documentation is wrong or out of date
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: requirement
+    attributes:
+      label: Requirement
+      description: >-
+        The numbered obligation this contradicts, if there is one. Pensieve is
+        at design stage, so most defects here are contradictions between stated
+        requirements rather than runtime failures.
+      placeholder: e.g. CICD-001.7.4
+    validations:
+      required: false
+  - type: input
+    id: harness
+    attributes:
+      label: Harness
+      description: For a collector issue, which harness it targets.
+      placeholder: e.g. Claude Code, Codex, Pi
+    validations:
+      required: false
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should be true?
+      description: Quote the requirement or contract text you are reading it against.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What is true instead?
+      description: >-
+        For a written contradiction, quote both sides. For a runtime failure,
+        include the output verbatim and redact any store credential.
+    validations:
+      required: true
