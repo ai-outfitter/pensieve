@@ -1,3 +1,4 @@
+import { sha256Hex } from "../canonical.ts";
 import { presignRequest, signRequest, type SigV4Credentials } from "./sigv4.ts";
 import {
 	createCredentialProvider,
@@ -75,6 +76,12 @@ export class S3Store implements Store {
 			// SRV-001.5.3.
 			headers["x-amz-object-lock-mode"] = "COMPLIANCE";
 			headers["x-amz-object-lock-retain-until-date"] = options.retainUntil.toISOString();
+			// AWS rejects a PUT carrying object-lock parameters unless it also
+			// carries a checksum: "Content-MD5 OR x-amz-checksum- HTTP header is
+			// required for Put Object requests with Object Lock parameters."
+			// MinIO does not enforce this, so it only appears against real S3.
+			// The store is content-addressed, so the checksum is already known.
+			headers["x-amz-checksum-sha256"] = Buffer.from(sha256Hex(body), "hex").toString("base64");
 		}
 		const response = await this.send("PUT", this.url(key), headers, body);
 		if (!response.ok) {
