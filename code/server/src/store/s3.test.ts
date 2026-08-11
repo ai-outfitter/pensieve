@@ -43,6 +43,34 @@ describe("S3 presigned PUT", () => {
 		});
 		expect(new Date(result.expires_at).getTime() - Date.now()).toBeWithin(298_000, 301_000);
 	});
+
+	test("resolves credentials for each presigned request", async () => {
+		let calls = 0;
+		const store = new S3Store({
+			...OPTIONS,
+			accessKeyId: undefined,
+			secretAccessKey: undefined,
+			credentialProvider: {
+				async getCredentials() {
+					calls += 1;
+					return { accessKeyId: `request-${calls}`, secretAccessKey: "secret" };
+				},
+			},
+		});
+		const request = {
+			digest: sha256Hex("payload"),
+			size: 7,
+			contentType: "text/plain",
+			retainUntil: new Date("2027-01-01T00:00:00.000Z"),
+			expiresSeconds: 300,
+		};
+
+		const first = await store.presignPut("payloads/first", request);
+		const second = await store.presignPut("payloads/second", request);
+		expect(new URL(first.url).searchParams.get("X-Amz-Credential")).toStartWith("request-1/");
+		expect(new URL(second.url).searchParams.get("X-Amz-Credential")).toStartWith("request-2/");
+		expect(calls).toBe(2);
+	});
 });
 
 const integrationEndpoint = Bun.env.PENSIEVE_S3_TEST_ENDPOINT;

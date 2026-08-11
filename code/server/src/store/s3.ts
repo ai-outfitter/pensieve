@@ -1,5 +1,10 @@
 import { presignRequest, signRequest, type SigV4Credentials } from "./sigv4.ts";
 import {
+	createCredentialProvider,
+	type CredentialProvider,
+	type CredentialSourceOptions,
+} from "./credentials.ts";
+import {
 	StoreError,
 	type HeadResult,
 	type PresignedPut,
@@ -8,15 +13,13 @@ import {
 	type Store,
 } from "./types.ts";
 
-export interface S3StoreOptions {
+export interface S3StoreOptions extends CredentialSourceOptions {
 	endpoint: string;
 	bucket: string;
-	region: string;
-	accessKeyId: string;
-	secretAccessKey: string;
-	sessionToken?: string;
 	/** Path style is required for MinIO and for any endpoint without bucket DNS. */
 	pathStyle?: boolean;
+	/** Overrides source selection for tests or embedding. */
+	credentialProvider?: CredentialProvider;
 }
 
 /**
@@ -26,14 +29,16 @@ export interface S3StoreOptions {
 export class S3Store implements Store {
 	readonly kind = "s3";
 	readonly conforming = true;
-	private readonly credentials: SigV4Credentials;
+	private readonly credentialProvider: CredentialProvider;
 
 	constructor(private readonly options: S3StoreOptions) {
-		this.credentials = {
-			accessKeyId: options.accessKeyId,
-			secretAccessKey: options.secretAccessKey,
-			sessionToken: options.sessionToken,
-			region: options.region,
+		this.credentialProvider = options.credentialProvider ?? createCredentialProvider(options);
+	}
+
+	private async credentials(): Promise<SigV4Credentials> {
+		return {
+			...(await this.credentialProvider.getCredentials()),
+			region: this.options.region,
 			service: "s3",
 		};
 	}
@@ -55,7 +60,7 @@ export class S3Store implements Store {
 		headers: Record<string, string> = {},
 		body?: Uint8Array,
 	): Promise<Response> {
-		const signed = signRequest({ method, url, headers, body }, this.credentials);
+		const signed = signRequest({ method, url, headers, body }, await this.credentials());
 		return fetch(url, { method, headers: signed, body });
 	}
 
@@ -101,7 +106,7 @@ export class S3Store implements Store {
 		};
 		const url = presignRequest(
 			{ method: "PUT", url: this.url(key), headers, expiresSeconds: options.expiresSeconds },
-			this.credentials,
+			await this.credentials(),
 			now,
 		);
 		return {
