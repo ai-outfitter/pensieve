@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/ai-outfitter/pensieve/compare/v0.2.0...v0.3.0) (2026-08-11)
+
+
+### Features
+
+* **payloads:** presign direct uploads to the object store ([#5](https://github.com/ai-outfitter/pensieve/issues/5)) ([9821400](https://github.com/ai-outfitter/pensieve/commit/98214005c090958a40a585195ca7c5c44ffbcf31))
+* **store:** authenticate to S3 with a projected web identity ([#8](https://github.com/ai-outfitter/pensieve/issues/8)) ([d965bc6](https://github.com/ai-outfitter/pensieve/commit/d965bc64e6a82f1d2f17b22876644555b5fcbb9c))
+
 ## [0.2.0](https://github.com/ai-outfitter/pensieve/compare/v0.1.0...v0.2.0) (2026-08-10)
 
 
