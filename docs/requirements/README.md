@@ -1,22 +1,31 @@
 # Pensieve requirements
 
 Formal, numbered project obligations live here as `<PREFIX>-NNN-<topic>.md` files.
-Three prefixes divide the system by the component that must satisfy the obligation:
+Four prefixes divide the system by the component that must satisfy the obligation:
 
 | Prefix | Component | Document |
 | --- | --- | --- |
 | `SRV` | Pensieve server — the evidence sink, store, and verifier | [SRV-001: Evidence Sink](./SRV-001-evidence-sink.md) |
 | `CLC` | Collectors — the per-harness capture extensions | [CLC-001: Harness Collectors](./CLC-001-harness-collectors.md) |
 | `CICD` | CI/CD — the forge gates that consume evidence | [CICD-001: Evidence Gates](./CICD-001-evidence-gates.md) |
+| `RTR` | Pensieve server — the read path over stored evidence | [RTR-001: Evidence Retrieval](./RTR-001-evidence-retrieval.md) |
 
 A requirement belongs to the component that can fail it. A rule about what a
 record must contain is `SRV` when the server rejects a malformed record, and
 `CLC` when only the collector can produce the field.
 
+`RTR` is the one prefix that does not name a distinct component — the server
+satisfies it, as it does `SRV`. It is separate because ingest and retrieval fail
+independently and at different times. A store can accept every record correctly
+for a year and still be unreadable, and no `SRV` statement describes that
+failure.
+
 ## Status
 
-Design stage, 2026-08-07. These documents specify intended behavior. No
-implementation exists yet, so no statement is pinned by a test.
+Implementation stage, 2026-08-11. `SRV-001` and `CLC-001` have running
+implementations and deployed sinks; `CICD-001` and `RTR-001` do not yet. Only
+some statements are pinned by tests, so a statement's presence here is not
+evidence that it holds.
 
 ## Statement format
 
