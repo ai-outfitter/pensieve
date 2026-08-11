@@ -7,7 +7,17 @@ export interface Config {
 	/** Dev auth accepts `Authorization: Bearer dev:<identity>`. Never enable in production. */
 	devAuth: boolean;
 	store:
-		| { kind: "s3"; endpoint: string; bucket: string; region: string; accessKeyId: string; secretAccessKey: string }
+		| {
+				kind: "s3";
+				endpoint: string;
+				bucket: string;
+				region: string;
+				accessKeyId?: string;
+				secretAccessKey?: string;
+				roleArn?: string;
+				webIdentityTokenFile?: string;
+				roleSessionName?: string;
+			}
 		| { kind: "filesystem"; root: string };
 }
 
@@ -26,30 +36,48 @@ function int(value: string | undefined, fallback: number): number {
  * startup error instead.
  */
 function loadStore(env: Record<string, string | undefined>): Config["store"] {
-	const s3Keys = [
-		"PENSIEVE_S3_ENDPOINT",
-		"PENSIEVE_S3_BUCKET",
-		"PENSIEVE_S3_ACCESS_KEY_ID",
-		"PENSIEVE_S3_SECRET_ACCESS_KEY",
-	] as const;
-	const present = s3Keys.filter((key) => env[key]);
+	const storeKeys = ["PENSIEVE_S3_ENDPOINT", "PENSIEVE_S3_BUCKET"] as const;
+	const staticKeys = ["PENSIEVE_S3_ACCESS_KEY_ID", "PENSIEVE_S3_SECRET_ACCESS_KEY"] as const;
+	const webIdentityKeys = ["AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE"] as const;
+	// Generic AWS variables do not select S3 by themselves: an IRSA-enabled
+	// service account can be used for unrelated AWS APIs. The explicit store
+	// declaration or a Pensieve-specific S3 variable still selects this backend.
+	const present = [...storeKeys, ...staticKeys].filter((key) => env[key]);
 	const declared = env.PENSIEVE_STORE;
 
 	if (declared === "filesystem") {
 		return { kind: "filesystem", root: env.PENSIEVE_FS_ROOT ?? "/var/lib/pensieve/objects" };
 	}
 	if (declared === "s3" || present.length > 0) {
-		const missing = s3Keys.filter((key) => !env[key]);
+		const missing = storeKeys.filter((key) => !env[key]);
 		if (missing.length > 0) {
 			throw new Error(`S3 store selected but incomplete; missing: ${missing.join(", ")}`);
+		}
+		const staticPresent = staticKeys.filter((key) => env[key]);
+		if (staticPresent.length === 1) {
+			const missingStatic = staticKeys.filter((key) => !env[key]);
+			throw new Error(`S3 static credentials incomplete; missing: ${missingStatic.join(", ")}`);
+		}
+		const webIdentityPresent = webIdentityKeys.filter((key) => env[key]);
+		if (staticPresent.length === 0 && webIdentityPresent.length === 1) {
+			const missingWebIdentity = webIdentityKeys.filter((key) => !env[key]);
+			throw new Error(`S3 web identity incomplete; missing: ${missingWebIdentity.join(", ")}`);
+		}
+		if (staticPresent.length === 0 && webIdentityPresent.length === 0) {
+			throw new Error(
+				"S3 store selected but no credentials configured; set PENSIEVE_S3_ACCESS_KEY_ID/PENSIEVE_S3_SECRET_ACCESS_KEY or AWS_ROLE_ARN/AWS_WEB_IDENTITY_TOKEN_FILE",
+			);
 		}
 		return {
 			kind: "s3",
 			endpoint: env.PENSIEVE_S3_ENDPOINT as string,
 			bucket: env.PENSIEVE_S3_BUCKET as string,
-			region: env.PENSIEVE_S3_REGION ?? "us-east-1",
-			accessKeyId: env.PENSIEVE_S3_ACCESS_KEY_ID as string,
-			secretAccessKey: env.PENSIEVE_S3_SECRET_ACCESS_KEY as string,
+			region: env.PENSIEVE_S3_REGION ?? env.AWS_REGION ?? "us-east-1",
+			accessKeyId: env.PENSIEVE_S3_ACCESS_KEY_ID,
+			secretAccessKey: env.PENSIEVE_S3_SECRET_ACCESS_KEY,
+			roleArn: env.AWS_ROLE_ARN,
+			webIdentityTokenFile: env.AWS_WEB_IDENTITY_TOKEN_FILE,
+			roleSessionName: env.AWS_ROLE_SESSION_NAME,
 		};
 	}
 	if (declared) throw new Error(`unknown PENSIEVE_STORE "${declared}"`);

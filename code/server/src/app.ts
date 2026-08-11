@@ -23,6 +23,9 @@ export async function createApp(config: Config): Promise<App> {
 					region: config.store.region,
 					accessKeyId: config.store.accessKeyId,
 					secretAccessKey: config.store.secretAccessKey,
+					roleArn: config.store.roleArn,
+					webIdentityTokenFile: config.store.webIdentityTokenFile,
+					roleSessionName: config.store.roleSessionName,
 				})
 			: new FilesystemStore(config.store.root);
 
