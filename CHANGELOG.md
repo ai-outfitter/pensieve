@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/ai-outfitter/pensieve/compare/v0.3.0...v0.3.1) (2026-08-11)
+
+
+### Bug Fixes
+
+* **store:** send a checksum with object-lock PUTs ([#9](https://github.com/ai-outfitter/pensieve/issues/9)) ([b122349](https://github.com/ai-outfitter/pensieve/commit/b1223495f5829ae54a045919b0e3eef838b6356f))
+
 ## [0.3.0](https://github.com/ai-outfitter/pensieve/compare/v0.2.0...v0.3.0) (2026-08-11)
 
 
