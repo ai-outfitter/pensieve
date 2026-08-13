@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/ai-outfitter/pensieve/compare/v0.3.1...v0.4.0) (2026-08-13)
+
+
+### Features
+
+* triage issues with an agent resolved from the catalog ([#12](https://github.com/ai-outfitter/pensieve/issues/12)) ([9337073](https://github.com/ai-outfitter/pensieve/commit/93370734e70afab1fa1d33cc34d38832896672e0))
+
+
+### Bug Fixes
+
+* track the action's v1 tag instead of a commit ([#16](https://github.com/ai-outfitter/pensieve/issues/16)) ([3429772](https://github.com/ai-outfitter/pensieve/commit/3429772be1c21892274ebc0d5780e5f376d30e9a))
+
 ## [0.3.1](https://github.com/ai-outfitter/pensieve/compare/v0.3.0...v0.3.1) (2026-08-11)
 
 
