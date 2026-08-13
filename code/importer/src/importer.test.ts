@@ -47,7 +47,10 @@ describe("import idempotency", () => {
 				calls.uploads += 1;
 				return { digest, size, media_type: "application/x-ndjson", locator: `memory:${digest}` };
 			},
-			async postRecord(record) { calls.records.push(record); },
+			async postRecord(record) {
+				calls.records.push(record);
+				return { digest: "f".repeat(64) };
+			},
 		};
 		const options: ImportOptions = {
 			sink: "https://sink.invalid", token: "secret", identity: "agent:test-workstation",
@@ -72,7 +75,14 @@ describe("import idempotency", () => {
 		expect(second.decisions[0]?.reason).toBe("payload digest already imported");
 		expect(calls.uploads).toBe(1);
 		expect(calls.records).toHaveLength(1);
-		expect(JSON.parse(await readFile(statePath, "utf8"))).toHaveProperty("version", 1);
+		const saved = JSON.parse(await readFile(statePath, "utf8"));
+		expect(saved).toHaveProperty("version", 1);
+		// The record digest is the only key GET /v0/records accepts, and the sink
+		// returns it exactly once. A checkpoint that drops it leaves the record
+		// unaddressable forever, which is how the first 2001 imports were lost to
+		// lookup.
+		expect(Object.values(saved.payloads as Record<string, { record_digest?: string }>)[0]?.record_digest)
+			.toBe("f".repeat(64));
 	});
 
 	test("retries a pending payload with an identical import timestamp", async () => {
@@ -86,6 +96,7 @@ describe("import idempotency", () => {
 			async postRecord(record) {
 				records.push(record);
 				if (records.length === 1) throw new Error("temporary failure");
+				return { digest: "a".repeat(64) };
 			},
 		};
 		const options: ImportOptions = {

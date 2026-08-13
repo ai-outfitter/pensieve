@@ -44,14 +44,34 @@ interface PayloadReference {
 	locator: string;
 }
 
+/** What the sink returns when it accepts a record. SRV-001.5.5. */
+export interface RecordReceipt {
+	digest: string;
+}
+
 export interface ImportSink {
 	upload(path: string, expectedDigest: string, size: number): Promise<PayloadReference>;
-	postRecord(record: Record<string, unknown>): Promise<void>;
+	postRecord(record: Record<string, unknown>): Promise<RecordReceipt>;
 }
 
 interface ImportState {
 	version: 1;
-	payloads: Record<string, { imported_at: string; imported_from: string; status?: "pending" | "complete" }>;
+	payloads: Record<
+		string,
+		{
+			imported_at: string;
+			imported_from: string;
+			status?: "pending" | "complete";
+			/**
+			 * The record digest the sink returned. `GET /v0/records/<digest>` is
+			 * keyed on it, so discarding it leaves the record unaddressable —
+			 * the payload is content-addressed and findable, the record is not.
+			 * Absent on entries written before this was retained; there is no
+			 * backfill, because the digest is only knowable at ingest.
+			 */
+			record_digest?: string;
+		}
+	>;
 }
 
 export class HttpImportSink implements ImportSink {
@@ -76,13 +96,18 @@ export class HttpImportSink implements ImportSink {
 		return { digest: expectedDigest, media_type: MEDIA_TYPE, size, locator: result.locator };
 	}
 
-	async postRecord(record: Record<string, unknown>): Promise<void> {
+	async postRecord(record: Record<string, unknown>): Promise<RecordReceipt> {
 		const response = await fetch(`${this.base}/v0/records`, {
 			method: "POST",
 			headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
 			body: JSON.stringify(record),
 		});
 		if (!response.ok) throw new Error(`record rejected: ${response.status} ${await response.text()}`);
+		const result = (await response.json()) as { digest?: unknown };
+		if (typeof result.digest !== "string" || !/^[0-9a-f]{64}$/.test(result.digest)) {
+			throw new Error("sink accepted the record but returned no record digest");
+		}
+		return { digest: result.digest };
 	}
 }
 
@@ -190,8 +215,13 @@ export async function importTranscripts(
 					stateWrite = stateWrite.then(() => saveState(options.statePath, state));
 					await stateWrite;
 					const payload = await sink.upload(item.path, item.digest, item.size);
-					await sink.postRecord(recordFor(item, payload, options, importedAt));
-					state.payloads[item.digest] = { imported_at: importedAt, imported_from: item.path, status: "complete" };
+					const receipt = await sink.postRecord(recordFor(item, payload, options, importedAt));
+					state.payloads[item.digest] = {
+						imported_at: importedAt,
+						imported_from: item.path,
+						status: "complete",
+						record_digest: receipt.digest,
+					};
 					stateWrite = stateWrite.then(() => saveState(options.statePath, state));
 					await stateWrite;
 					decision = { kind: "imported", path: item.path, reason: "payload and record accepted", digest: item.digest };
