@@ -4,6 +4,7 @@
   "type": "module",
   "workspaces": [
     "server",
+    "importer",
     "collectors/*"
   ],
   "scripts": {

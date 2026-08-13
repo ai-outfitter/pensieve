@@ -34,6 +34,13 @@
         "@pensieve/collector-core": "workspace:*",
       },
     },
+    "importer": {
+      "name": "@pensieve/importer",
+      "version": "0.1.0",
+      "bin": {
+        "pensieve-import": "src/cli.ts",
+      },
+    },
     "server": {
       "name": "@pensieve/server",
       "version": "0.1.0",
@@ -47,6 +54,8 @@
     "@pensieve/collector-core": ["@pensieve/collector-core@workspace:collectors/core"],
 
     "@pensieve/collector-pi": ["@pensieve/collector-pi@workspace:collectors/pi"],
+
+    "@pensieve/importer": ["@pensieve/importer@workspace:importer"],
 
     "@pensieve/server": ["@pensieve/server@workspace:server"],
 
