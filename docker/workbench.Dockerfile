@@ -10,6 +10,7 @@ FROM oven/bun:1 AS collectors
 WORKDIR /build
 COPY code/package.json code/bun.lock ./
 COPY code/server/package.json server/
+COPY code/importer/package.json importer/
 COPY code/collectors/core/package.json collectors/core/
 COPY code/collectors/claude/package.json collectors/claude/
 COPY code/collectors/codex/package.json collectors/codex/

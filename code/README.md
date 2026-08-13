@@ -14,7 +14,7 @@ A Bun workspace. Three published pieces and one shared library.
 
 ```sh
 bun install
-bun test          # 17 tests, each pinned to a requirement ID
+bun test          # requirement-pinned tests carry a HARD REQUIREMENT comment
 bunx tsc --noEmit
 sh scripts/build-collectors.sh dist
 ```

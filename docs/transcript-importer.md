@@ -12,9 +12,16 @@ bun run importer/src/cli.ts \
   --dry-run
 ```
 
-Remove `--dry-run` only after reviewing the decisions. `--since` compares the
-date with each file's modification time, `--project` matches a substring of its
-absolute path, and `--concurrency` controls simultaneous scans and uploads.
+Remove `--dry-run` only after you review the decisions.
+
+Pass the importing workstation's authenticated machine principal as
+`--identity`. It must name the same principal that `--token` authenticates. The
+sink accepts a payload from any writer but refuses a record whose identity
+disagrees with the token (SRV-001.2.4), so a mismatch is fatal to the run.
+
+`--source` sets the transcript tree to scan. To import one project, point it at
+that project's directory. `--since` imports only the files modified on or after
+the given ISO date.
 
 ## Reconstruction is not observation
 
@@ -34,8 +41,8 @@ For that reason every imported record carries all four explicit markers:
 }
 ```
 
-The importing workstation's authenticated principal is used as `identity`.
-Claude Code and its discovered version are recorded as `harness` and
+The value you pass as `--identity` becomes the record's `identity`. The importer
+records Claude Code and its discovered version as `harness` and
 `harness_version`. `install_scope` is deliberately omitted: no Pensieve
 installation observed these historical sessions. The unrecoverable original
 policy is represented as `policy_digest: "unattested:imported"`, never guessed.
@@ -47,8 +54,10 @@ It uploads the original bytes verbatim even when individual JSONL lines are
 malformed. It scans all parseable lines for `sessionId`, `cwd`, `version`, and
 `gitBranch`; a file without a `sessionId` is skipped.
 
-Files over 60 MiB are skipped before any request, leaving headroom below the
-64 MiB ingress cap. Successfully recorded payload digests are stored in
+Files over 60 MiB are skipped before any request. The threshold leaves headroom
+below the request-body limit a deployment's ingress applies; it is a property of
+the deployment, not of the sink, so confirm it for your own. Successfully
+recorded payload digests are stored in
 `$XDG_STATE_HOME/pensieve/claude-transcript-imports.json` (or
 `~/.local/state/pensieve/claude-transcript-imports.json`). A rerun uses that
 content digest checkpoint to report and skip records already imported. The
@@ -56,3 +65,42 @@ checkpoint records a pending attempt before upload and marks it complete only
 after the transcript record is accepted. A retry reuses the same import
 timestamp, so its content-addressed record remains identical even if the first
 response was lost.
+
+## What the command reports
+
+Each file gets one line labelled `WOULD IMPORT`, `IMPORTED`, `SKIPPED`, or
+`FAILED`, then a summary of the counts. The command exits 1 if any file failed,
+2 if the arguments were wrong, and 0 otherwise.
+
+A file is skipped for one of these reasons:
+
+| Reason | Meaning |
+| --- | --- |
+| `empty file` | the file has no bytes |
+| `exceeds safe upload threshold` | the file is over the size limit above |
+| `no sessionId` | no parseable line carries a `sessionId` |
+| `payload digest already imported` | these exact bytes are already in the sink |
+| `duplicate payload digest in source tree` | another path in this run has the same bytes |
+| `older than --since` | the file predates the given date |
+| `source grew since import and the prior record digest is unknown` | see below |
+| `run aborted` | a credential was refused, so the run stopped |
+
+A rerun retries only the files that did not complete. It is safe to run the
+command again after a failure.
+
+## A session that is still running
+
+A Claude Code transcript is append-only, so a session that was live during an
+earlier import comes back with different bytes and a different digest. The
+importer does not simply import it again: two unlinked transcript records for
+one session, in a store that can withdraw neither, leave a reader unable to tell
+which is later.
+
+Instead the new record names the record it replaces, in `supersedes`
+(SRV-001.3.5). This needs the earlier record's digest, which the importer only
+retains from the run that wrote it. Where that digest is unknown — as for any
+record imported before the importer kept it — the file is skipped and reported,
+because a correction that cannot name what it corrects is worse than no
+correction.
+
+Import a session after it ends, and none of this applies.

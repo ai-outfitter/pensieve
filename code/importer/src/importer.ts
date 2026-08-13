@@ -4,6 +4,11 @@ import { findTranscripts, inspectTranscript, type TranscriptInspection } from ".
 
 const MEDIA_TYPE = "application/x-ndjson";
 
+// Concurrency is fixed rather than exposed. Every value would be a supported
+// configuration nobody tests, and the interleaving it changes is exactly where
+// the duplicate-record and abort semantics live.
+const CONCURRENCY = 4;
+
 export interface ImportOptions {
 	sink: string;
 	token: string;
@@ -11,12 +16,22 @@ export interface ImportOptions {
 	source: string;
 	dryRun: boolean;
 	since?: Date;
-	project?: string;
-	concurrency: number;
 	statePath: string;
 	maxBytes?: number;
 	now?: () => Date;
 }
+
+/**
+ * An authentication or authorization failure is fatal for the whole run.
+ *
+ * A payload upload only needs write permission; the identity check happens when
+ * the RECORD is ingested (SRV-001.2.4). So a token and an --identity that do not
+ * agree upload every transcript in the tree into COMPLIANCE-locked storage and
+ * then have every record refused. Those bytes cannot be deleted and nothing
+ * references them. Treating the first 401/403 as fatal is what bounds that to
+ * one file.
+ */
+export class FatalImportError extends Error {}
 
 export type DecisionKind = "imported" | "would-import" | "skipped" | "failed";
 
@@ -87,6 +102,9 @@ export class HttpImportSink implements ImportSink {
 			headers: { authorization: `Bearer ${this.token}`, "content-type": MEDIA_TYPE },
 			body: Bun.file(path),
 		});
+		if (response.status === 401 || response.status === 403) {
+			throw new FatalImportError(`payload refused: ${response.status} ${await response.text()}`);
+		}
 		if (!response.ok) throw new Error(`payload rejected: ${response.status} ${await response.text()}`);
 		const result = (await response.json()) as { digest?: unknown; locator?: unknown };
 		if (result.digest !== expectedDigest) {
@@ -102,6 +120,13 @@ export class HttpImportSink implements ImportSink {
 			headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
 			body: JSON.stringify(record),
 		});
+		if (response.status === 401 || response.status === 403) {
+			throw new FatalImportError(
+				`record refused: ${response.status} ${await response.text()}. ` +
+					"The payload is already stored and cannot be removed. Check that --identity " +
+					"names the principal --token authenticates.",
+			);
+		}
 		if (!response.ok) throw new Error(`record rejected: ${response.status} ${await response.text()}`);
 		const result = (await response.json()) as { digest?: unknown };
 		if (typeof result.digest !== "string" || !/^[0-9a-f]{64}$/.test(result.digest)) {
@@ -143,9 +168,18 @@ function skipReason(item: TranscriptInspection): string | undefined {
 	}
 }
 
-function recordFor(item: TranscriptInspection, payload: PayloadReference, options: ImportOptions, importedAt: string) {
+function recordFor(
+	item: TranscriptInspection,
+	payload: PayloadReference,
+	options: ImportOptions,
+	importedAt: string,
+	supersedes: string[] = [],
+) {
 	const metadata = item.metadata;
 	return {
+		// A transcript that grew is a correction, and a correction must name what
+		// it replaces rather than silently sit beside it. SRV-001.3.5.
+		...(supersedes.length > 0 ? { supersedes } : {}),
 		kind: "transcript",
 		run: metadata.sessionId,
 		attempt: 1,
@@ -184,18 +218,50 @@ export async function importTranscripts(
 	sink: ImportSink = new HttpImportSink(options.sink, options.token),
 	onDecision?: (decision: ImportDecision, completed: number, total: number) => void,
 ): Promise<ImportSummary> {
-	const allPaths = await findTranscripts(options.source);
-	const paths = allPaths.filter((path) => !options.project || path.includes(options.project));
+	const paths = await findTranscripts(options.source);
 	const state = await loadState(options.statePath);
-	const inspections = await mapConcurrent(paths, options.concurrency, (path) => inspectTranscript(path, options.maxBytes));
+
+	// A file that cannot be read must not end the run. Scanning a live
+	// ~/.claude/projects races the harness rotating its own files, so one ENOENT
+	// or EACCES would otherwise reject out of Promise.all and discard every
+	// remaining result.
+	const inspections = await mapConcurrent(paths, CONCURRENCY, async (path) => {
+		try {
+			return await inspectTranscript(path, options.maxBytes);
+		} catch (error) {
+			return { path, error: error instanceof Error ? error.message : String(error) } as const;
+		}
+	});
+
+	// Which digests each source path has already been imported at. A Claude Code
+	// transcript is append-only, so a session that was live during an earlier run
+	// comes back with a different digest and the digest-keyed skip does not fire.
+	const priorByPath = new Map<string, Array<{ digest: string; record_digest?: string }>>();
+	for (const [digest, entry] of Object.entries(state.payloads)) {
+		if (entry.status !== "complete") continue;
+		const list = priorByPath.get(entry.imported_from) ?? [];
+		list.push({ digest, record_digest: entry.record_digest });
+		priorByPath.set(entry.imported_from, list);
+	}
+
 	const seen = new Set<string>();
 	let completed = 0;
 	let stateWrite = Promise.resolve();
+	let fatal: FatalImportError | undefined;
 
-	const decisions = await mapConcurrent(inspections, options.concurrency, async (item) => {
+	const decisions = await mapConcurrent(inspections, CONCURRENCY, async (item) => {
 		let decision: ImportDecision;
+		if ("error" in item) {
+			decision = { kind: "failed", path: item.path, reason: `cannot read transcript: ${item.error}` };
+			completed += 1;
+			onDecision?.(decision, completed, inspections.length);
+			return decision;
+		}
 		const reason = skipReason(item);
-		if (reason) {
+		const prior = priorByPath.get(item.path) ?? [];
+		if (fatal) {
+			decision = { kind: "skipped", path: item.path, reason: "run aborted", digest: item.digest };
+		} else if (reason) {
 			decision = { kind: "skipped", path: item.path, reason, digest: item.digest };
 		} else if (options.since && item.modifiedAt < options.since) {
 			decision = { kind: "skipped", path: item.path, reason: "older than --since", digest: item.digest };
@@ -203,6 +269,17 @@ export async function importTranscripts(
 			decision = { kind: "skipped", path: item.path, reason: "payload digest already imported", digest: item.digest };
 		} else if (item.digest && seen.has(item.digest)) {
 			decision = { kind: "skipped", path: item.path, reason: "duplicate payload digest in source tree", digest: item.digest };
+		} else if (prior.length > 0 && !prior.some((entry) => entry.record_digest)) {
+			// The source grew since it was imported, and the record that covers the
+			// earlier bytes was never retained, so a new record could not name what
+			// it supersedes. Writing one anyway puts two unlinked transcripts for
+			// the same run into a store that cannot correct either. SRV-001.3.5.
+			decision = {
+				kind: "skipped",
+				path: item.path,
+				reason: "source grew since import and the prior record digest is unknown",
+				digest: item.digest,
+			};
 		} else {
 			if (!item.digest) throw new Error("eligible transcript has no digest");
 			seen.add(item.digest);
@@ -215,7 +292,8 @@ export async function importTranscripts(
 					stateWrite = stateWrite.then(() => saveState(options.statePath, state));
 					await stateWrite;
 					const payload = await sink.upload(item.path, item.digest, item.size);
-					const receipt = await sink.postRecord(recordFor(item, payload, options, importedAt));
+					const supersedes = prior.flatMap((entry) => (entry.record_digest ? [entry.record_digest] : []));
+					const receipt = await sink.postRecord(recordFor(item, payload, options, importedAt, supersedes));
 					state.payloads[item.digest] = {
 						imported_at: importedAt,
 						imported_from: item.path,
@@ -226,6 +304,7 @@ export async function importTranscripts(
 					await stateWrite;
 					decision = { kind: "imported", path: item.path, reason: "payload and record accepted", digest: item.digest };
 				} catch (error) {
+					if (error instanceof FatalImportError) fatal ??= error;
 					decision = { kind: "failed", path: item.path, reason: error instanceof Error ? error.message : String(error), digest: item.digest };
 				}
 			}
@@ -235,8 +314,16 @@ export async function importTranscripts(
 		return decision;
 	});
 
+	if (fatal) throw fatal;
+
+	// Only skips aggregate. A failure reason is a free-text error message, so
+	// counting those turns the summary into a verbatim reprint of the per-file
+	// log — worse the more files fail, which is when the summary matters most.
 	const reasons: Record<string, number> = {};
-	for (const decision of decisions) reasons[decision.reason] = (reasons[decision.reason] ?? 0) + 1;
+	for (const decision of decisions) {
+		if (decision.kind !== "skipped") continue;
+		reasons[decision.reason] = (reasons[decision.reason] ?? 0) + 1;
+	}
 	return {
 		discovered: paths.length,
 		imported: decisions.filter((item) => item.kind === "imported").length,

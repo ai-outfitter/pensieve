@@ -6,6 +6,7 @@ WORKDIR /app
 FROM base AS deps
 COPY package.json bun.lock ./
 COPY server/package.json server/
+COPY importer/package.json importer/
 COPY collectors/core/package.json collectors/core/
 COPY collectors/claude/package.json collectors/claude/
 COPY collectors/codex/package.json collectors/codex/

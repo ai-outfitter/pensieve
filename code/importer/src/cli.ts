@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { importTranscripts, type ImportOptions } from "./importer.ts";
+import { importTranscripts, type ImportOptions, type ImportSummary } from "./importer.ts";
 import { DEFAULT_MAX_BYTES } from "./transcript.ts";
 
 const HELP = `pensieve-import imports existing Claude Code JSONL transcripts into a Pensieve sink.
@@ -9,7 +9,6 @@ const HELP = `pensieve-import imports existing Claude Code JSONL transcripts int
 Usage:
   pensieve-import --sink <url> --token <token> --identity <id>
                   [--source ~/.claude/projects] [--dry-run] [--since <date>]
-                  [--project <substring>] [--concurrency N]
 
 Reconstructed evidence is not observed evidence. Every emitted record explicitly
 sets provenance="imported" and observed=false, and records its absolute source
@@ -24,8 +23,6 @@ Options:
   --source PATH          transcript tree (default: ~/.claude/projects)
   --dry-run              read and classify files without contacting the sink or writing state
   --since DATE           only files modified on or after this ISO date
-  --project SUBSTRING    only paths containing this substring
-  --concurrency N        concurrent file scans and uploads (default: 4)
   -h, --help             show this help
 
 Files larger than ${DEFAULT_MAX_BYTES / 1024 / 1024} MiB are skipped before upload. Source files are
@@ -46,17 +43,13 @@ function parseArgs(argv: string[]): ImportOptions | null {
 		if (!argument?.startsWith("--")) throw new Error(`unexpected argument: ${argument}`);
 		const value = argv[++index];
 		if (!value || value.startsWith("--")) throw new Error(`${argument} requires a value`);
-		if (!["--sink", "--token", "--identity", "--source", "--since", "--project", "--concurrency"].includes(argument)) {
+		if (!["--sink", "--token", "--identity", "--source", "--since"].includes(argument)) {
 			throw new Error(`unknown option: ${argument}`);
 		}
 		values.set(argument, value);
 	}
 	for (const required of ["--sink", "--token", "--identity"]) {
 		if (!values.get(required)) throw new Error(`${required} is required`);
-	}
-	const concurrency = Number(values.get("--concurrency") ?? "4");
-	if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 64) {
-		throw new Error("--concurrency must be an integer from 1 to 64");
 	}
 	let since: Date | undefined;
 	if (values.has("--since")) {
@@ -71,8 +64,6 @@ function parseArgs(argv: string[]): ImportOptions | null {
 		source: resolve(values.get("--source") ?? join(homedir(), ".claude", "projects")),
 		dryRun,
 		since,
-		project: values.get("--project"),
-		concurrency,
 		statePath: join(stateRoot, "pensieve", "claude-transcript-imports.json"),
 	};
 }
@@ -91,10 +82,20 @@ async function main(): Promise<void> {
 		return;
 	}
 	console.log(`${options.dryRun ? "Dry run: scanning" : "Scanning"} ${options.source}`);
-	const summary = await importTranscripts(options, undefined, (decision, completed, total) => {
-		const label = decision.kind === "would-import" ? "WOULD IMPORT" : decision.kind.toUpperCase();
-		console.log(`[${completed}/${total}] ${label} ${decision.path} — ${decision.reason}`);
-	});
+	let summary: ImportSummary;
+	try {
+		summary = await importTranscripts(options, undefined, (decision, completed, total) => {
+			const label = decision.kind === "would-import" ? "WOULD IMPORT" : decision.kind.toUpperCase();
+			console.log(`[${completed}/${total}] ${label} ${decision.path} — ${decision.reason}`);
+		});
+	} catch (error) {
+		// A refused credential stops the run. Continuing would upload the rest of
+		// the tree into storage that cannot release it, for records the sink will
+		// refuse one by one.
+		console.error(`\nAborted: ${error instanceof Error ? error.message : String(error)}`);
+		process.exitCode = 1;
+		return;
+	}
 	console.log("\nSummary");
 	console.log(`  discovered:   ${summary.discovered}`);
 	console.log(`  imported:     ${summary.imported}`);
