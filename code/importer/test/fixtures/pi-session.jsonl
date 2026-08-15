@@ -1,0 +1,5 @@
+{"type":"session","version":3,"id":"01990000-0000-7000-8000-0000000f1c70","timestamp":"2026-08-12T09:30:00.000Z","cwd":"/home/example/project"}
+{"type":"model_change","id":"11111111","parentId":null,"timestamp":"2026-08-12T09:30:01.000Z","provider":"example-provider","modelId":"example-model"}
+{"type":"thinking_level_change","id":"22222222","parentId":"11111111","timestamp":"2026-08-12T09:30:01.001Z","thinkingLevel":"medium"}
+{"type":"message","id":"33333333","parentId":"22222222","timestamp":"2026-08-12T09:30:05.000Z","message":{"role":"user","content":[{"type":"text","text":"Fixture prompt text."}],"timestamp":1786519805000}}
+{"type":"custom","customType":"example:fixture-mode","data":{"mode":"reads"},"id":"44444444","parentId":"33333333","timestamp":"2026-08-12T09:30:06.000Z"}

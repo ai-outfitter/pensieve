@@ -1,8 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import type { HarnessAdapter } from "./harness.ts";
 import { findTranscripts, inspectTranscript, type TranscriptInspection } from "./transcript.ts";
-
-const MEDIA_TYPE = "application/x-ndjson";
 
 // Concurrency is fixed rather than exposed. Every value would be a supported
 // configuration nobody tests, and the interleaving it changes is exactly where
@@ -13,7 +12,10 @@ export interface ImportOptions {
 	sink: string;
 	token: string;
 	identity: string;
-	source: string;
+	/** Adapters in detection order; a file belongs to the first that claims it. */
+	adapters: HarnessAdapter[];
+	/** Roots to scan. Defaults to each adapter's own default source. */
+	sources?: string[];
 	dryRun: boolean;
 	since?: Date;
 	statePath: string;
@@ -65,7 +67,7 @@ export interface RecordReceipt {
 }
 
 export interface ImportSink {
-	upload(path: string, expectedDigest: string, size: number): Promise<PayloadReference>;
+	upload(path: string, expectedDigest: string, size: number, mediaType: string): Promise<PayloadReference>;
 	postRecord(record: Record<string, unknown>): Promise<RecordReceipt>;
 }
 
@@ -76,6 +78,8 @@ interface ImportState {
 		{
 			imported_at: string;
 			imported_from: string;
+			/** Which adapter claimed the file, so the checkpoint can answer "which Codex sessions are imported". */
+			harness?: string;
 			status?: "pending" | "complete";
 			/**
 			 * The record digest the sink returned. `GET /v0/records/<digest>` is
@@ -96,10 +100,10 @@ export class HttpImportSink implements ImportSink {
 		this.base = sink.replace(/\/$/, "");
 	}
 
-	async upload(path: string, expectedDigest: string, size: number): Promise<PayloadReference> {
+	async upload(path: string, expectedDigest: string, size: number, mediaType: string): Promise<PayloadReference> {
 		const response = await fetch(`${this.base}/v0/payloads`, {
 			method: "POST",
-			headers: { authorization: `Bearer ${this.token}`, "content-type": MEDIA_TYPE },
+			headers: { authorization: `Bearer ${this.token}`, "content-type": mediaType },
 			body: Bun.file(path),
 		});
 		if (response.status === 401 || response.status === 403) {
@@ -111,7 +115,7 @@ export class HttpImportSink implements ImportSink {
 			throw new Error(`sink returned payload digest ${String(result.digest)}, expected ${expectedDigest}`);
 		}
 		if (typeof result.locator !== "string") throw new Error("sink returned no payload locator");
-		return { digest: expectedDigest, media_type: MEDIA_TYPE, size, locator: result.locator };
+		return { digest: expectedDigest, media_type: mediaType, size, locator: result.locator };
 	}
 
 	async postRecord(record: Record<string, unknown>): Promise<RecordReceipt> {
@@ -160,41 +164,51 @@ function skipReason(item: TranscriptInspection): string | undefined {
 	switch (item.skipReason) {
 		case "empty": return "empty file";
 		case "too-large": return "exceeds safe upload threshold";
-		case "missing-session-id":
+		case "unknown-harness": return "no harness adapter recognizes this file";
+		case "missing-run":
 			return item.malformedLines > 0
-				? `no sessionId (${item.malformedLines} malformed line${item.malformedLines === 1 ? "" : "s"} ignored)`
-				: "no sessionId";
+				? `no run identity (${item.malformedLines} malformed line${item.malformedLines === 1 ? "" : "s"} ignored)`
+				: "no run identity";
 		case undefined: return undefined;
 	}
 }
 
 function recordFor(
 	item: TranscriptInspection,
+	adapter: HarnessAdapter,
 	payload: PayloadReference,
 	options: ImportOptions,
 	importedAt: string,
 	supersedes: string[] = [],
 ) {
-	const metadata = item.metadata;
 	return {
 		// A transcript that grew is a correction, and a correction must name what
 		// it replaces rather than silently sit beside it. SRV-001.3.5.
 		...(supersedes.length > 0 ? { supersedes } : {}),
 		kind: "transcript",
-		run: metadata.sessionId,
 		attempt: 1,
 		identity: options.identity,
 		environment: "workstation",
 		policy_digest: "unattested:imported",
 		created_at: importedAt,
-		harness: "claude-code",
-		harness_version: metadata.version ?? "unknown",
-		cwd: metadata.cwd,
-		git_branch: metadata.gitBranch,
 		provenance: "imported",
 		observed: false,
 		imported_from: item.path,
 		imported_at: importedAt,
+		// A reconstructed transcript satisfies no live capture class: not
+		// model-exchange (CLC-001.7.2), and not the session or tool events a
+		// collector would have observed. The gaps are declared, never silent.
+		// CLC-001.4.4.
+		capture: {
+			profile: "reconstructed",
+			required: [],
+			captured: ["transcript"],
+			gaps: adapter.unsupported,
+		},
+		// The adapter's fields last: run/transcript_id/parent_run/harness/
+		// harness_version/cwd/started_at/git are its statement about its own
+		// format. The invariants above are the engine's and stay engine-owned.
+		...adapter.toRecordFields(item.metadata),
 		payload,
 	};
 }
@@ -218,8 +232,10 @@ export async function importTranscripts(
 	sink: ImportSink = new HttpImportSink(options.sink, options.token),
 	onDecision?: (decision: ImportDecision, completed: number, total: number) => void,
 ): Promise<ImportSummary> {
-	const paths = await findTranscripts(options.source);
+	const sources = options.sources ?? options.adapters.map((adapter) => adapter.defaultSource(process.env));
+	const paths = (await Promise.all(sources.map((source) => findTranscripts(source)))).flat();
 	const state = await loadState(options.statePath);
+	const adapterByName = new Map(options.adapters.map((adapter) => [adapter.harness, adapter]));
 
 	// A file that cannot be read must not end the run. Scanning a live
 	// ~/.claude/projects races the harness rotating its own files, so one ENOENT
@@ -227,7 +243,7 @@ export async function importTranscripts(
 	// remaining result.
 	const inspections = await mapConcurrent(paths, CONCURRENCY, async (path) => {
 		try {
-			return await inspectTranscript(path, options.maxBytes);
+			return await inspectTranscript(path, options.adapters, options.maxBytes);
 		} catch (error) {
 			return { path, error: error instanceof Error ? error.message : String(error) } as const;
 		}
@@ -258,7 +274,11 @@ export async function importTranscripts(
 			return decision;
 		}
 		const reason = skipReason(item);
-		const prior = priorByPath.get(item.path) ?? [];
+		const adapter = item.harness !== undefined ? adapterByName.get(item.harness) : undefined;
+		// Grew-since-import handling applies only to a harness that appends to a
+		// live transcript in place. For one that writes once or rotates, a new
+		// digest at an old path is a different file, not a correction.
+		const prior = adapter?.appendOnly ? (priorByPath.get(item.path) ?? []) : [];
 		if (fatal) {
 			decision = { kind: "skipped", path: item.path, reason: "run aborted", digest: item.digest };
 		} else if (reason) {
@@ -288,15 +308,17 @@ export async function importTranscripts(
 			} else {
 				try {
 					const importedAt = state.payloads[item.digest]?.imported_at ?? (options.now ?? (() => new Date()))().toISOString();
-					state.payloads[item.digest] = { imported_at: importedAt, imported_from: item.path, status: "pending" };
+					state.payloads[item.digest] = { imported_at: importedAt, imported_from: item.path, harness: item.harness, status: "pending" };
 					stateWrite = stateWrite.then(() => saveState(options.statePath, state));
 					await stateWrite;
-					const payload = await sink.upload(item.path, item.digest, item.size);
+					if (!adapter) throw new Error("eligible transcript has no adapter");
+					const payload = await sink.upload(item.path, item.digest, item.size, adapter.mediaType);
 					const supersedes = prior.flatMap((entry) => (entry.record_digest ? [entry.record_digest] : []));
-					const receipt = await sink.postRecord(recordFor(item, payload, options, importedAt, supersedes));
+					const receipt = await sink.postRecord(recordFor(item, adapter, payload, options, importedAt, supersedes));
 					state.payloads[item.digest] = {
 						imported_at: importedAt,
 						imported_from: item.path,
+						harness: item.harness,
 						status: "complete",
 						record_digest: receipt.digest,
 					};

@@ -9,7 +9,7 @@ A Bun workspace. Three published pieces and one shared library.
 | `@pensieve/collector-claude` | `collectors/claude/` | Claude Code collector — managed-settings hooks. |
 | `@pensieve/collector-codex` | `collectors/codex/` | Codex collector — managed lifecycle hooks. |
 | `@pensieve/collector-pi` | `collectors/pi/` | Pi collector — in-process extension. |
-| `@pensieve/importer` | `importer/` | Client-only import of historical Claude Code transcripts. |
+| `@pensieve/importer` | `importer/` | Client-only import of historical Claude Code, Codex, and pi transcripts. |
 | — | `example-repo/` | The forge gates as GitHub workflows and rulesets. Implements [CICD-001](../docs/requirements/CICD-001-evidence-gates.md). |
 
 ```sh
@@ -19,7 +19,7 @@ bunx tsc --noEmit
 sh scripts/build-collectors.sh dist
 ```
 
-Historical Claude Code transcripts can be classified without writing anything:
+Historical transcripts can be classified without writing anything:
 
 ```sh
 bun run importer/src/cli.ts --sink <url> --token <token> --identity <machine-principal> --dry-run

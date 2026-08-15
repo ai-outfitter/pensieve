@@ -1,14 +1,16 @@
-# Importing Claude Code transcripts
+# Importing coding-agent transcripts
 
-`pensieve-import` reconstructs transcript records from Claude Code's existing
-append-only JSONL session files. Run it from the `code/` workspace:
+`pensieve-import` reconstructs transcript records from the JSONL session files
+that Claude Code, Codex, and pi already keep on disk. It identifies each file
+by its content — a path under `~/.codex` can never make a file "codex" — and
+each harness's specifics live in one adapter file under
+`code/importer/src/adapters/`. Run it from the `code/` workspace:
 
 ```sh
 bun run importer/src/cli.ts \
   --sink https://pensieve.example \
   --token "$PENSIEVE_TOKEN" \
   --identity agent:ncrmro-workstation \
-  --source ~/.claude/projects \
   --dry-run
 ```
 
@@ -19,9 +21,24 @@ Pass the importing workstation's authenticated machine principal as
 sink accepts a payload from any writer but refuses a record whose identity
 disagrees with the token (SRV-001.2.4), so a mismatch is fatal to the run.
 
-`--source` sets the transcript tree to scan. To import one project, point it at
-that project's directory. `--since` imports only the files modified on or after
-the given ISO date.
+With no `--harness` and no `--source`, the importer scans all three harnesses'
+default roots: `~/.claude/projects`, `~/.codex/sessions`, and
+`~/.pi/agent/sessions`. `--harness` restricts the run to one harness.
+`--source` sets one tree to scan; files in it are still identified by content.
+`--since` imports only the files modified on or after the given ISO date.
+
+## Identity is composite
+
+`run` groups transcripts: the session or thread the work belongs to. A Claude
+subagent sidechain carries its parent's session id, so it shares the parent's
+`run` — and 1458 sidechain files are why `run` alone is not an identity.
+`transcript_id` is unique per file: the agent id for a Claude sidechain, the
+rollout id for Codex, the session id elsewhere. `parent_run` names a different
+run this one descends from (a Codex `parent_thread_id`, a forked session), and
+is null where the harness has none.
+
+Fields no harness records are null, never inferred: pi keeps no harness version
+and no git information; only Codex records a commit SHA.
 
 ## Reconstruction is not observation
 
