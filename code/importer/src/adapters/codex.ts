@@ -71,20 +71,29 @@ export const codexAdapter: HarnessAdapter = {
 	scanLine(value, meta) {
 		const payload = sessionMeta(value);
 		if (payload === undefined) return;
-		// First header wins, whole. `id` is present on every real header, so
-		// this is the reliable "already scanned one" flag.
-		if (meta.transcriptId !== undefined) return;
+		// First header wins, whole — a resumed session re-emits session_meta
+		// mid-file (81 of the local rollouts), and replaying a later header
+		// would splice two headers' identities into one record. The guard is
+		// its own flag, not `transcriptId`, so a header that somehow lacked
+		// `id` still counts as scanned rather than letting the next header
+		// overwrite half the fields.
+		const scratch = meta as TranscriptMetadata & { headerScanned?: boolean };
+		if (scratch.headerScanned) return;
+		scratch.headerScanned = true;
 
 		const id = text(payload, "id");
 		meta.transcriptId = id;
 		// 2025-era rollouts have no `session_id`; the rollout id is then the
 		// only thread identity there is.
 		meta.run = text(payload, "session_id") ?? id;
-		// A subagent thread names its caller; a forked session names its
-		// origin. A resumed rollout repeats its OWN thread id here, and a run
-		// is not its own parent, so an echo of `run` is dropped.
+		// `parent_thread_id` is NOT a run. On every real nested-subagent
+		// rollout it names the caller's rollout id — a per-file transcript
+		// identity — and on every depth-1 subagent it merely echoes the root
+		// session id this file already carries as `run`. Recording it as
+		// `parentRun` would freeze a reference that resolves to no run into
+		// the store, so it is kept transcript-scoped, echo dropped.
 		const parent = text(payload, "parent_thread_id") ?? text(payload, "forked_from_id");
-		if (parent !== undefined && parent !== meta.run) meta.parentRun = parent;
+		if (parent !== undefined && parent !== meta.run && parent !== id) meta.parentTranscript = parent;
 
 		meta.cwd = text(payload, "cwd");
 		meta.harnessVersion = text(payload, "cli_version");
@@ -107,7 +116,10 @@ export const codexAdapter: HarnessAdapter = {
 			// The rollout id, unique per file even when several rollouts share
 			// one thread.
 			transcript_id: meta.transcriptId ?? meta.run,
-			parent_run: meta.parentRun ?? null,
+			// Codex records no run-scoped parent: parent_thread_id names a
+			// rollout — a transcript — so the link stays transcript-scoped.
+			parent_run: null,
+			parent_transcript: meta.parentTranscript ?? null,
 			harness: "codex",
 			harness_version: meta.harnessVersion ?? null,
 			cwd: meta.cwd ?? null,

@@ -182,6 +182,11 @@ function recordFor(
 	supersedes: string[] = [],
 ) {
 	return {
+		// The adapter speaks FIRST and the engine's invariants land after it,
+		// so no adapter — present or future — can clobber provenance,
+		// observed, the capture report, or supersedes. A wrong value in any
+		// of those is uncorrectable once the record is stored.
+		...adapter.toRecordFields(item.metadata),
 		// A transcript that grew is a correction, and a correction must name what
 		// it replaces rather than silently sit beside it. SRV-001.3.5.
 		...(supersedes.length > 0 ? { supersedes } : {}),
@@ -205,10 +210,6 @@ function recordFor(
 			captured: ["transcript"],
 			gaps: adapter.unsupported,
 		},
-		// The adapter's fields last: run/transcript_id/parent_run/harness/
-		// harness_version/cwd/started_at/git are its statement about its own
-		// format. The invariants above are the engine's and stay engine-owned.
-		...adapter.toRecordFields(item.metadata),
 		payload,
 	};
 }
@@ -232,8 +233,23 @@ export async function importTranscripts(
 	sink: ImportSink = new HttpImportSink(options.sink, options.token),
 	onDecision?: (decision: ImportDecision, completed: number, total: number) => void,
 ): Promise<ImportSummary> {
+	// A default root that does not exist is a harness that is not installed on
+	// this machine, not an error — but an explicitly passed --source that does
+	// not exist is a typo and must fail loudly.
+	const explicit = options.sources !== undefined;
 	const sources = options.sources ?? options.adapters.map((adapter) => adapter.defaultSource(process.env));
-	const paths = (await Promise.all(sources.map((source) => findTranscripts(source)))).flat();
+	const paths = (
+		await Promise.all(
+			sources.map(async (source) => {
+				try {
+					return await findTranscripts(source);
+				} catch (error) {
+					if (!explicit && (error as NodeJS.ErrnoException).code === "ENOENT") return [];
+					throw error;
+				}
+			}),
+		)
+	).flat();
 	const state = await loadState(options.statePath);
 	const adapterByName = new Map(options.adapters.map((adapter) => [adapter.harness, adapter]));
 

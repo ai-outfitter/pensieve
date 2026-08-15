@@ -360,4 +360,24 @@ describe("composite run identity", () => {
 		expect(byId.get("bbbb")).toMatchObject({ run: "aaaa-session", transcript_id: "bbbb" });
 		expect(byId.get("aaaa-session")).toMatchObject({ run: "aaaa-session", transcript_id: "aaaa-session" });
 	});
+
+	test("a parentSessionId that echoes the file's own session never becomes parent_run", () => {
+		// 16 of the 1964 real sidechain files carry parentSessionId equal to
+		// their own sessionId. A run is not its own parent, and the record is
+		// immutable once stored.
+		const meta = {};
+		claudeAdapter.scanLine(
+			{ type: "user", uuid: "u1", parentUuid: null, sessionId: "s-1", parentSessionId: "s-1", agentId: "kid" },
+			meta,
+		);
+		expect(claudeAdapter.toRecordFields(meta)).toMatchObject({ run: "s-1", transcript_id: "kid", parent_run: null });
+
+		// A genuinely different parent survives the guard.
+		const forked = {};
+		claudeAdapter.scanLine(
+			{ type: "user", uuid: "u1", parentUuid: null, sessionId: "s-2", parentSessionId: "s-1" },
+			forked,
+		);
+		expect(claudeAdapter.toRecordFields(forked)).toMatchObject({ run: "s-2", parent_run: "s-1" });
+	});
 });

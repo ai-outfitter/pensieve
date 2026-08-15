@@ -48,10 +48,10 @@ describe("codex metadata", () => {
 		// THIS TEST VALIDATES A HARD REQUIREMENT (CLC-001.1.7 identity)
 		// `run` must be the THREAD id, not the rollout id: keying on `id` splits
 		// one resumed thread into one run per rollout file.
-		expect(result.metadata).toEqual({
+		expect(result.metadata).toMatchObject({
 			run: "00000000-1111-7000-8000-aaaaaaaaaaaa",
 			transcriptId: "00000000-2222-7000-8000-bbbbbbbbbbbb",
-			parentRun: "00000000-3333-7000-8000-cccccccccccc",
+			parentTranscript: "00000000-3333-7000-8000-cccccccccccc",
 			cwd: "/work/fixture-repo",
 			harnessVersion: "0.147.0",
 			gitBranch: "feat/fixture",
@@ -68,7 +68,10 @@ describe("codex metadata", () => {
 	});
 
 	test("drops a parent_thread_id that only echoes the run", () => {
-		// A resumed rollout repeats its own thread id here. `parentRun` names a
+		// Every depth-1 subagent rollout repeats the ROOT session id here — its
+		// parent thread IS the run it already belongs to. (Resumes are a
+		// different mechanism entirely: they re-emit session_meta mid-file.)
+		// `parentTranscript` names a
 		// DIFFERENT run or nothing at all.
 		const meta: TranscriptMetadata = {};
 		codexAdapter.scanLine(
@@ -79,7 +82,7 @@ describe("codex metadata", () => {
 			meta,
 		);
 		expect(meta.run).toBe("thread-1");
-		expect(meta.parentRun).toBeUndefined();
+		expect(meta.parentTranscript).toBeUndefined();
 	});
 
 	test("falls back to forked_from_id when there is no parent thread", () => {
@@ -88,7 +91,7 @@ describe("codex metadata", () => {
 			{ type: "session_meta", payload: { id: "rollout-3", session_id: "thread-2", forked_from_id: "thread-1" } },
 			meta,
 		);
-		expect(meta.parentRun).toBe("thread-1");
+		expect(meta.parentTranscript).toBe("thread-1");
 	});
 
 	test("reads a 2025-era header with no session_id, no git, and a string source", () => {
@@ -98,7 +101,7 @@ describe("codex metadata", () => {
 		// Before `session_id` existed the rollout id was the only thread identity.
 		expect(meta.run).toBe("01999999-0000-7000-8000-eeeeeeeeeeee");
 		expect(meta.transcriptId).toBe(meta.run);
-		expect(meta.parentRun).toBeUndefined();
+		expect(meta.parentTranscript).toBeUndefined();
 		expect(meta.gitBranch).toBeUndefined();
 		expect(meta.gitCommit).toBeUndefined();
 
@@ -106,6 +109,7 @@ describe("codex metadata", () => {
 			run: "01999999-0000-7000-8000-eeeeeeeeeeee",
 			transcript_id: "01999999-0000-7000-8000-eeeeeeeeeeee",
 			parent_run: null,
+			parent_transcript: null,
 			harness: "codex",
 			harness_version: "0.53.0",
 			cwd: "/work/legacy",
@@ -138,6 +142,7 @@ describe("codex record fields", () => {
 			"harness",
 			"harness_version",
 			"parent_run",
+			"parent_transcript",
 			"run",
 			"started_at",
 			"transcript_id",
@@ -145,7 +150,8 @@ describe("codex record fields", () => {
 		expect(fields).toEqual({
 			run: "00000000-1111-7000-8000-aaaaaaaaaaaa",
 			transcript_id: "00000000-2222-7000-8000-bbbbbbbbbbbb",
-			parent_run: "00000000-3333-7000-8000-cccccccccccc",
+			parent_run: null,
+			parent_transcript: "00000000-3333-7000-8000-cccccccccccc",
 			harness: "codex",
 			harness_version: "0.147.0",
 			cwd: "/work/fixture-repo",

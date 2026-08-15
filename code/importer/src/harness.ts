@@ -37,6 +37,14 @@ export interface TranscriptMetadata {
 	run?: string;
 	transcriptId?: string;
 	parentRun?: string;
+	/**
+	 * The immediate parent TRANSCRIPT, where a harness records one — a Codex
+	 * nested-subagent rollout names its caller's rollout id, which is a
+	 * per-file identity, not a run. Kept apart from `parentRun` so a
+	 * transcript-scoped link is never frozen into the store as a run-scoped
+	 * one that resolves to nothing.
+	 */
+	parentTranscript?: string;
 	cwd?: string;
 	harnessVersion?: string;
 	gitBranch?: string;

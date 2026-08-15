@@ -82,7 +82,11 @@ export const claudeAdapter: HarnessAdapter = {
 			run: meta.run,
 			// A top-level session file has no agentId; it is its own transcript.
 			transcript_id: meta.transcriptId ?? meta.run,
-			parent_run: meta.parentRun ?? null,
+			// Sixteen real sidechain files carry a parentSessionId that merely
+			// echoes their own sessionId, and a run is not its own parent. The
+			// guard lives here, not in scanLine, because parentSessionId can be
+			// scanned before run settles.
+			parent_run: meta.parentRun === meta.run ? null : (meta.parentRun ?? null),
 			harness: "claude-code",
 			harness_version: meta.harnessVersion ?? null,
 			cwd: meta.cwd ?? null,

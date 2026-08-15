@@ -80,7 +80,7 @@ export async function inspectTranscript(
 			base.malformedLines += 1;
 			return;
 		}
-		if (adapter === undefined && window.length <= DETECT_WINDOW) {
+		if (adapter === undefined && window.length < DETECT_WINDOW) {
 			window.push(value);
 			adapter = adapters.find((candidate) => candidate.detect(window));
 			if (adapter) {

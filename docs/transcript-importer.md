@@ -58,9 +58,8 @@ For that reason every imported record carries all four explicit markers:
 }
 ```
 
-The value you pass as `--identity` becomes the record's `identity`. The importer
-records Claude Code and its discovered version as `harness` and
-`harness_version`. `install_scope` is deliberately omitted: no Pensieve
+The value you pass as `--identity` becomes the record's `identity`. The adapter that claimed the file records `harness` and `harness_version`;
+pi keeps no version anywhere, so its records carry `harness_version: null`. `install_scope` is deliberately omitted: no Pensieve
 installation observed these historical sessions. The unrecoverable original
 policy is represented as `policy_digest: "unattested:imported"`, never guessed.
 
@@ -68,15 +67,17 @@ policy is represented as `policy_digest: "unattested:imported"`, never guessed.
 
 The importer opens source files read-only and never modifies or deletes them.
 It uploads the original bytes verbatim even when individual JSONL lines are
-malformed. It scans all parseable lines for `sessionId`, `cwd`, `version`, and
-`gitBranch`; a file without a `sessionId` is skipped.
+malformed. Each adapter scans the parseable lines for its own metadata fields; a file
+with no run identity, and a file no adapter recognizes, are skipped and named
+in the summary.
 
 Files over 60 MiB are skipped before any request. The threshold leaves headroom
 below the request-body limit a deployment's ingress applies; it is a property of
 the deployment, not of the sink, so confirm it for your own. Successfully
 recorded payload digests are stored in
-`$XDG_STATE_HOME/pensieve/claude-transcript-imports.json` (or
-`~/.local/state/pensieve/claude-transcript-imports.json`). A rerun uses that
+`$XDG_STATE_HOME/pensieve/transcript-imports.json` (or
+`~/.local/state/pensieve/transcript-imports.json`); each entry records which
+harness claimed the file. A rerun uses that
 content digest checkpoint to report and skip records already imported. The
 checkpoint records a pending attempt before upload and marks it complete only
 after the transcript record is accepted. A retry reuses the same import
@@ -95,7 +96,8 @@ A file is skipped for one of these reasons:
 | --- | --- |
 | `empty file` | the file has no bytes |
 | `exceeds safe upload threshold` | the file is over the size limit above |
-| `no sessionId` | no parseable line carries a `sessionId` |
+| `no run identity` | no parseable line carries this harness's session identity |
+| `no harness adapter recognizes this file` | detection is by content, and no adapter claimed it |
 | `payload digest already imported` | these exact bytes are already in the sink |
 | `duplicate payload digest in source tree` | another path in this run has the same bytes |
 | `older than --since` | the file predates the given date |
