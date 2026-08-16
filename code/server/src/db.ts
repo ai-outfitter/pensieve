@@ -18,6 +18,7 @@ export interface IndexedRecord {
 	ref_head: string | null;
 	tag: string | null;
 	status: string | null;
+	harness: string | null;
 }
 
 export class RecordIndex {
@@ -39,12 +40,14 @@ export class RecordIndex {
 				ref_head    TEXT,
 				tag         TEXT,
 				status      TEXT,
+				harness     TEXT,
 				received_at TEXT NOT NULL
 			);
 			CREATE INDEX IF NOT EXISTS records_sha      ON records (sha);
 			CREATE INDEX IF NOT EXISTS records_patch_id ON records (patch_id);
 			CREATE INDEX IF NOT EXISTS records_ref      ON records (ref, created_at);
 			CREATE INDEX IF NOT EXISTS records_tag      ON records (tag);
+			CREATE INDEX IF NOT EXISTS records_listing  ON records (created_at, digest);
 			CREATE TABLE IF NOT EXISTS findings (
 				id         INTEGER PRIMARY KEY AUTOINCREMENT,
 				kind       TEXT NOT NULL,
@@ -67,7 +70,7 @@ export class RecordIndex {
 		const columns = new Set(
 			(this.db.query("PRAGMA table_info(records)").all() as Array<{ name: string }>).map((c) => c.name),
 		);
-		for (const [name, type] of [["ref_head", "TEXT"]] as const) {
+		for (const [name, type] of [["ref_head", "TEXT"], ["harness", "TEXT"]] as const) {
 			if (!columns.has(name)) this.db.run(`ALTER TABLE records ADD COLUMN ${name} ${type}`);
 		}
 	}
@@ -76,8 +79,8 @@ export class RecordIndex {
 		this.db
 			.query(
 				`INSERT OR IGNORE INTO records
-				 (digest, kind, run, identity, created_at, sha, patch_id, ref, ref_head, tag, status, received_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				 (digest, kind, run, identity, created_at, sha, patch_id, ref, ref_head, tag, status, harness, received_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			)
 			.run(
 				record.digest,
@@ -91,6 +94,7 @@ export class RecordIndex {
 				record.ref_head,
 				record.tag,
 				record.status,
+				record.harness,
 				new Date().toISOString(),
 			);
 	}
@@ -135,5 +139,62 @@ export class RecordIndex {
 
 	close(): void {
 		this.db.close();
+	}
+
+	/**
+	 * Enumerate records without a digest in hand. RTR-001.2.1, RTR-001.2.2.
+	 *
+	 * Keyset pagination on (created_at, digest): an opaque cursor names the
+	 * last row returned, so concurrent ingest never shifts a page the way an
+	 * OFFSET would. RTR-001.2.4. This is the INDEX speaking — fetch and verify
+	 * the record itself from the store by its digest; a listing is a map,
+	 * never evidence. SRV-001.10.5.
+	 */
+	search(filters: {
+		kind?: string;
+		run?: string;
+		identity?: string;
+		harness?: string;
+		since?: string;
+		until?: string;
+		limit: number;
+		cursor?: { created_at: string; digest: string };
+	}): IndexedRecord[] {
+		const where: string[] = [];
+		const args: string[] = [];
+		for (const field of ["kind", "run", "identity", "harness"] as const) {
+			const value = filters[field];
+			if (value !== undefined) {
+				where.push(`${field} = ?`);
+				args.push(value);
+			}
+		}
+		if (filters.since !== undefined) {
+			where.push("created_at >= ?");
+			args.push(filters.since);
+		}
+		if (filters.until !== undefined) {
+			where.push("created_at < ?");
+			args.push(filters.until);
+		}
+		if (filters.cursor !== undefined) {
+			where.push("(created_at, digest) > (?, ?)");
+			args.push(filters.cursor.created_at, filters.cursor.digest);
+		}
+		const clause = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+		return this.db
+			.query(`SELECT * FROM records ${clause} ORDER BY created_at, digest LIMIT ?`)
+			.all(...args, String(filters.limit)) as IndexedRecord[];
+	}
+
+	/** Rows indexed before the harness column existed. */
+	missingHarness(): string[] {
+		return (this.db.query("SELECT digest FROM records WHERE harness IS NULL").all() as Array<{ digest: string }>).map(
+			(row) => row.digest,
+		);
+	}
+
+	setHarness(digest: string, harness: string): void {
+		this.db.query("UPDATE records SET harness = ? WHERE digest = ?").run(harness, digest);
 	}
 }

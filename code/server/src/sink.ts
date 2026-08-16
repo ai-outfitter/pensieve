@@ -23,7 +23,8 @@ const PRESIGN_EXPIRY_SECONDS = 5 * 60;
  * commit a record covers, and a landing's new ref head has its own column.
  */
 function projectForIndex(record: BaseRecord): Omit<IndexedRecord, "digest" | "kind" | "run" | "identity" | "created_at"> {
-	const empty = { sha: null, patch_id: null, ref: null, ref_head: null, tag: null, status: null };
+	const harness = typeof record.harness === "string" && record.harness.length > 0 ? record.harness : null;
+	const empty = { sha: null, patch_id: null, ref: null, ref_head: null, tag: null, status: null, harness };
 	switch (record.kind) {
 		case "commit-evidence": {
 			const commit = record as CommitEvidenceRecord;
@@ -262,6 +263,57 @@ export class Sink {
 		if (!bytes) return null;
 		if (sha256Hex(bytes) !== digest) throw new Error(`record ${digest} failed digest verification`);
 		return JSON.parse(DECODER.decode(bytes)) as BaseRecord;
+	}
+
+	/**
+	 * Payload bytes by digest, re-hashed on read: the sink refuses to serve
+	 * bytes whose digest does not match the key naming them. RTR-001.1.1,
+	 * RTR-001.1.2. The head precedes the get so the response can report the
+	 * recorded content type and the lock the store actually holds — a reader
+	 * reaches its own immutability conclusion without store credentials.
+	 * RTR-001.1.3, RTR-001.1.4, RTR-001.1.5.
+	 */
+	async readPayload(digest: string): Promise<{
+		bytes: Uint8Array;
+		contentType: string;
+		lock: { mode: string | null; retain_until: string | null };
+	} | null> {
+		const key = `payloads/${digest.slice(0, 2)}/${digest}`;
+		const head = await this.store.head(key);
+		if (!head) return null;
+		const bytes = await this.store.get(key);
+		if (!bytes) return null;
+		if (sha256Hex(bytes) !== digest) throw new Error(`payload ${digest} failed digest verification`);
+		const retention = head.version ? await this.store.getRetention(key, head.version) : null;
+		return {
+			bytes,
+			contentType: head.contentType ?? "application/octet-stream",
+			lock: { mode: retention?.mode ?? null, retain_until: retention?.retain_until ?? null },
+		};
+	}
+
+	/** The index speaking, never evidence. RTR-001.2. */
+	searchRecords(filters: Parameters<RecordIndex["search"]>[0]) {
+		return this.index.search(filters);
+	}
+
+	/**
+	 * The harness column is derived and additive; rows indexed before it
+	 * existed hold NULL and would be invisible to a harness filter. The index
+	 * is rebuilt from the records themselves — the store is the truth, the
+	 * index is a map — so this is a re-derivation, not a migration of
+	 * authoritative data. RTR-001 (index rebuild path).
+	 */
+	async backfillHarness(): Promise<number> {
+		let updated = 0;
+		for (const digest of this.index.missingHarness()) {
+			const record = await this.readRecord(digest).catch(() => null);
+			if (record && typeof record.harness === "string" && record.harness.length > 0) {
+				this.index.setHarness(digest, record.harness);
+				updated += 1;
+			}
+		}
+		return updated;
 	}
 
 	/** SRV-001.10.1. */

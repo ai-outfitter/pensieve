@@ -109,6 +109,57 @@ export async function createApp(config: Config): Promise<App> {
 		}
 
 		if (method === "GET") {
+			// Listing before the by-digest routes: /v0/records with no digest is
+			// discovery. RTR-001.2.1. The response is index-derived; a caller
+			// verifies by fetching each record by digest. SRV-001.10.5.
+			if (path === "/v0/records") {
+				const limitRaw = url.searchParams.get("limit") ?? "100";
+				const limit = Number(limitRaw);
+				if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
+					return problem(400, "limit must be an integer from 1 to 1000");
+				}
+				let cursor: { created_at: string; digest: string } | undefined;
+				const cursorRaw = url.searchParams.get("cursor");
+				if (cursorRaw !== null) {
+					// The cursor is opaque to callers: base64 of created_at|digest.
+					const decoded = Buffer.from(cursorRaw, "base64url").toString("utf8");
+					const split = decoded.lastIndexOf("|");
+					if (split < 1) return problem(400, "cursor is not one this sink issued");
+					cursor = { created_at: decoded.slice(0, split), digest: decoded.slice(split + 1) };
+				}
+				const filters: Record<string, string> = {};
+				for (const field of ["kind", "run", "identity", "harness", "since", "until"] as const) {
+					const value = url.searchParams.get(field);
+					if (value !== null) filters[field] = value;
+				}
+				const rows = sink.searchRecords({ ...filters, limit, cursor });
+				const last = rows[rows.length - 1];
+				return Response.json({
+					records: rows,
+					cursor:
+						rows.length === limit && last
+							? Buffer.from(`${last.created_at}|${last.digest}`, "utf8").toString("base64url")
+							: null,
+				});
+			}
+
+			// Payload bytes by digest. Without this route the store is
+			// write-only over HTTP and readable only with store credentials —
+			// which also grant write. RTR-001.1.1, RTR-001.1.5.
+			const payloadDigest = hexParam(path, "payloads", 64);
+			if (payloadDigest) {
+				const found = await sink.readPayload(payloadDigest);
+				if (!found) return problem(404, "no such payload");
+				return new Response(new Uint8Array(found.bytes), {
+					headers: {
+						"content-type": found.contentType,
+						"x-pensieve-digest": payloadDigest,
+						...(found.lock.mode ? { "x-pensieve-lock-mode": found.lock.mode } : {}),
+						...(found.lock.retain_until ? { "x-pensieve-retain-until": found.lock.retain_until } : {}),
+					},
+				});
+			}
+
 			const record = hexParam(path, "records", 64);
 			if (record) {
 				const found = await sink.readRecord(record);

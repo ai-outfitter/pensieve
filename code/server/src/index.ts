@@ -14,6 +14,13 @@ const server = Bun.serve({
 	},
 });
 
+// Rows indexed before the harness column existed hold NULL; re-derive them
+// from the records in the store so a harness filter sees the whole history.
+// Runs after listen — the sink serves while it backfills.
+void app.sink.backfillHarness().then((updated) => {
+	if (updated > 0) console.log(`  backfilled harness on ${updated} index rows`);
+});
+
 const identity = app.sink.identity;
 console.log(`pensieve sink listening on http://${server.hostname}:${server.port}`);
 console.log(`  sink        ${identity.id} (key ${identity.key_id})`);
