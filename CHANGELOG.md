@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.5.0](https://github.com/ai-outfitter/pensieve/compare/v0.4.0...v0.5.0) (2026-08-16)
+
+
+### Features
+
+* **importer:** import Claude Code, Codex, and pi transcripts into the sink ([c6fb080](https://github.com/ai-outfitter/pensieve/commit/c6fb08072cfea5b43e6453c3d9fffaeb1cbd626c))
+* **importer:** import harness transcripts into the sink ([f5e993c](https://github.com/ai-outfitter/pensieve/commit/f5e993c2a2e1b61389460dfe9dc8521f14625841)), closes [#14](https://github.com/ai-outfitter/pensieve/issues/14)
+* **importer:** keep the record digest the sink returns ([cef979f](https://github.com/ai-outfitter/pensieve/commit/cef979f77627ecbca2b8e355cfe1c382a99ed24c)), closes [#14](https://github.com/ai-outfitter/pensieve/issues/14)
+* **server:** read the record — payload bytes and a session index ([f45431e](https://github.com/ai-outfitter/pensieve/commit/f45431ede5093729e4a4cc7110a882e01863527b))
+* **server:** read the record — payload bytes and a session index ([646f766](https://github.com/ai-outfitter/pensieve/commit/646f76640f25f2c9d67e31eb50fd75bca1907af2)), closes [#14](https://github.com/ai-outfitter/pensieve/issues/14)
+
+
+### Bug Fixes
+
+* **importer:** act on the adversarial review ([e493152](https://github.com/ai-outfitter/pensieve/commit/e4931520a8672fdf8e36d9a4228e407559ea2945)), closes [#14](https://github.com/ai-outfitter/pensieve/issues/14)
+* **importer:** act on the second adversarial review ([b4e31a8](https://github.com/ai-outfitter/pensieve/commit/b4e31a81b8efd7d9cd85e2100c2e70a7c526ae5a))
+* **server:** act on the read-path review ([3dd1b55](https://github.com/ai-outfitter/pensieve/commit/3dd1b55b30cb3e3738ba2dafec28e00716473654)), closes [#14](https://github.com/ai-outfitter/pensieve/issues/14)
+
 ## [0.4.0](https://github.com/ai-outfitter/pensieve/compare/v0.3.1...v0.4.0) (2026-08-13)
 
 
