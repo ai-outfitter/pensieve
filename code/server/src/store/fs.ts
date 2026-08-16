@@ -45,7 +45,7 @@ export class FilesystemStore implements Store {
 		return { locator: `file://${path}`, size: file.size, contentType: recorded || undefined };
 	}
 
-	async get(key: string): Promise<Uint8Array | null> {
+	async get(key: string, _version?: string): Promise<Uint8Array | null> {
 		const file = Bun.file(this.path(key));
 		if (!(await file.exists())) return null;
 		return new Uint8Array(await file.arrayBuffer());

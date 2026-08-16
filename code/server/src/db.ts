@@ -19,6 +19,10 @@ export interface IndexedRecord {
 	tag: string | null;
 	status: string | null;
 	harness: string | null;
+	payload_digest: string | null;
+	provenance: string | null;
+	/** 1 observed, 0 backfilled/imported, NULL where the record predates the column and is unexamined. */
+	observed: number | null;
 }
 
 export class RecordIndex {
@@ -41,6 +45,9 @@ export class RecordIndex {
 				tag         TEXT,
 				status      TEXT,
 				harness     TEXT,
+				payload_digest TEXT,
+				provenance  TEXT,
+				observed    INTEGER,
 				received_at TEXT NOT NULL
 			);
 			CREATE INDEX IF NOT EXISTS records_sha      ON records (sha);
@@ -70,7 +77,13 @@ export class RecordIndex {
 		const columns = new Set(
 			(this.db.query("PRAGMA table_info(records)").all() as Array<{ name: string }>).map((c) => c.name),
 		);
-		for (const [name, type] of [["ref_head", "TEXT"], ["harness", "TEXT"]] as const) {
+		for (const [name, type] of [
+			["ref_head", "TEXT"],
+			["harness", "TEXT"],
+			["payload_digest", "TEXT"],
+			["provenance", "TEXT"],
+			["observed", "INTEGER"],
+		] as const) {
 			if (!columns.has(name)) this.db.run(`ALTER TABLE records ADD COLUMN ${name} ${type}`);
 		}
 	}
@@ -79,8 +92,9 @@ export class RecordIndex {
 		this.db
 			.query(
 				`INSERT OR IGNORE INTO records
-				 (digest, kind, run, identity, created_at, sha, patch_id, ref, ref_head, tag, status, harness, received_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				 (digest, kind, run, identity, created_at, sha, patch_id, ref, ref_head, tag, status, harness,
+				  payload_digest, provenance, observed, received_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			)
 			.run(
 				record.digest,
@@ -95,6 +109,9 @@ export class RecordIndex {
 				record.tag,
 				record.status,
 				record.harness,
+				record.payload_digest,
+				record.provenance,
+				record.observed,
 				new Date().toISOString(),
 			);
 	}
@@ -155,6 +172,8 @@ export class RecordIndex {
 		run?: string;
 		identity?: string;
 		harness?: string;
+		provenance?: string;
+		observed?: boolean;
 		since?: string;
 		until?: string;
 		limit: number;
@@ -162,12 +181,16 @@ export class RecordIndex {
 	}): IndexedRecord[] {
 		const where: string[] = [];
 		const args: string[] = [];
-		for (const field of ["kind", "run", "identity", "harness"] as const) {
+		for (const field of ["kind", "run", "identity", "harness", "provenance"] as const) {
 			const value = filters[field];
 			if (value !== undefined) {
 				where.push(`${field} = ?`);
 				args.push(value);
 			}
+		}
+		if (filters.observed !== undefined) {
+			where.push("observed = ?");
+			args.push(filters.observed ? "1" : "0");
 		}
 		if (filters.since !== undefined) {
 			where.push("created_at >= ?");
@@ -187,14 +210,24 @@ export class RecordIndex {
 			.all(...args, String(filters.limit)) as IndexedRecord[];
 	}
 
-	/** Rows indexed before the harness column existed. */
-	missingHarness(): string[] {
-		return (this.db.query("SELECT digest FROM records WHERE harness IS NULL").all() as Array<{ digest: string }>).map(
+	/**
+	 * Rows indexed before the derived columns existed and not yet examined.
+	 * `observed` doubles as the examined marker: the backfill always sets it,
+	 * so a record WITHOUT the newer fields is recorded as examined rather
+	 * than re-read from the store on every boot forever.
+	 */
+	unexamined(): string[] {
+		return (this.db.query("SELECT digest FROM records WHERE observed IS NULL").all() as Array<{ digest: string }>).map(
 			(row) => row.digest,
 		);
 	}
 
-	setHarness(digest: string, harness: string): void {
-		this.db.query("UPDATE records SET harness = ? WHERE digest = ?").run(harness, digest);
+	setDerived(
+		digest: string,
+		derived: { harness: string | null; payload_digest: string | null; provenance: string | null; observed: number },
+	): void {
+		this.db
+			.query("UPDATE records SET harness = ?, payload_digest = ?, provenance = ?, observed = ? WHERE digest = ?")
+			.run(derived.harness, derived.payload_digest, derived.provenance, derived.observed, digest);
 	}
 }

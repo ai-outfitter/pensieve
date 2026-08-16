@@ -127,10 +127,18 @@ export async function createApp(config: Config): Promise<App> {
 					if (split < 1) return problem(400, "cursor is not one this sink issued");
 					cursor = { created_at: decoded.slice(0, split), digest: decoded.slice(split + 1) };
 				}
-				const filters: Record<string, string> = {};
-				for (const field of ["kind", "run", "identity", "harness", "since", "until"] as const) {
+				const filters: Record<string, string | boolean> = {};
+				for (const field of ["kind", "run", "identity", "harness", "provenance", "since", "until"] as const) {
 					const value = url.searchParams.get(field);
 					if (value !== null) filters[field] = value;
+				}
+				const observed = url.searchParams.get("observed");
+				if (observed !== null) {
+					if (observed !== "true" && observed !== "false") {
+						return problem(400, "observed must be true or false");
+					}
+					// RTR-001.3.4: a reader can filter to observed records only.
+					filters.observed = observed === "true";
 				}
 				const rows = sink.searchRecords({ ...filters, limit, cursor });
 				const last = rows[rows.length - 1];
@@ -154,6 +162,7 @@ export async function createApp(config: Config): Promise<App> {
 					headers: {
 						"content-type": found.contentType,
 						"x-pensieve-digest": payloadDigest,
+						"x-pensieve-locator": found.locator,
 						...(found.lock.mode ? { "x-pensieve-lock-mode": found.lock.mode } : {}),
 						...(found.lock.retain_until ? { "x-pensieve-retain-until": found.lock.retain_until } : {}),
 					},

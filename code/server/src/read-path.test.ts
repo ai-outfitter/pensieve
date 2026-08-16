@@ -68,6 +68,9 @@ describe("payload retrieval", () => {
 		expect(await got.text()).toBe(bytes);
 		expect(got.headers.get("content-type")).toBe("application/x-ndjson");
 		expect(got.headers.get("x-pensieve-digest")).toBe(digest);
+		// RTR-001.1.4: locator, lock mode, and retain-until in the response.
+		// The dev store proves the locator; lock headers need a locking store.
+		expect(got.headers.get("x-pensieve-locator")).toContain(digest);
 	});
 
 	test("an unknown payload digest is 404, and reading needs no store credentials", async () => {
@@ -108,6 +111,44 @@ describe("record discovery", () => {
 		expect(first?.digest).toMatch(/^[0-9a-f]{64}$/);
 		const fetched = await handle(new Request(`https://sink.test/v0/records/${first?.digest}`, { headers: READ }));
 		expect(fetched.status).toBe(200);
+	});
+
+	// THIS TEST VALIDATES A HARD REQUIREMENT (RTR-001.3.4)
+	// YOU MUST NOT MODIFY THIS TEST UNLESS THE REQUIREMENT CHANGES
+	test("a listing row carries the payload digest and provenance, and filters to observed only", async () => {
+		const { handle } = await app();
+		const put = await handle(
+			new Request("https://sink.test/v0/payloads", {
+				method: "POST",
+				headers: { ...AUTH, "content-type": "application/x-ndjson" },
+				body: '{"observed":"no"}\n',
+			}),
+		);
+		const { digest: payloadDigest, locator } = (await put.json()) as { digest: string; locator: string };
+		await post(
+			handle,
+			"/v0/records",
+			transcript({
+				run: "imported-run",
+				payload: { digest: payloadDigest, media_type: "application/x-ndjson", size: 18, locator },
+			}),
+		);
+		await post(handle, "/v0/records", transcript({ run: "observed-run", provenance: undefined, observed: undefined }));
+
+		const all = (await (await handle(new Request("https://sink.test/v0/records", { headers: READ }))).json()) as {
+			records: Array<{ run: string; payload_digest: string | null; provenance: string | null; observed: number }>;
+		};
+		const imported = all.records.find((row) => row.run === "imported-run");
+		// RTR-001.2.3: the row names the payload without a second fetch.
+		expect(imported?.payload_digest).toBe(payloadDigest);
+		// RTR-001.3.1: backfilled is visible in the listing itself.
+		expect(imported?.provenance).toBe("imported");
+		expect(imported?.observed).toBe(0);
+
+		const observedOnly = (await (
+			await handle(new Request("https://sink.test/v0/records?observed=true", { headers: READ }))
+		).json()) as { records: Array<{ run: string }> };
+		expect(observedOnly.records.map((row) => row.run)).toEqual(["observed-run"]);
 	});
 
 	// THIS TEST VALIDATES A HARD REQUIREMENT (RTR-001.2.4)
