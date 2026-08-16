@@ -97,3 +97,22 @@ the failure this component exists to prevent.
 2. A collector cannot report a session in which it never ran. Absence of a session record MUST therefore be treated by the sink and the gates as unattested, never as clean.
 3. Where a harness offers a flag that skips hooks or extensions, the organization SHOULD compile a control that blocks that flag, and the deployment MUST record whether such a control is in force.
 4. A collector MUST NOT be disableable from inside the session it observes when it is installed at managed scope.
+
+### CLC-001.9: Usage Accounting Projection
+
+> **Implementation status (2026-08-16):** These statements specify the target
+> projection onto existing records. No collector implementation or test proves
+> them yet.
+
+1. A collector MUST project usage accounting onto the existing `model-exchange`, `tool-call`, and `session` record kinds defined by SRV-001.13.
+2. A collector MUST preserve the provider's requested model and resolved model as separate values when its event surface exposes both.
+3. A collector MUST emit `null` for a usage counter that its event surface does not expose. It MUST name that counter in `usage_gaps`.
+4. A collector MUST NOT infer a zero token count or zero cost from an absent provider field.
+5. A collector MUST preserve provider-reported cost, amount, and currency without replacing them with a price-book estimate.
+6. A collector MAY derive a price-book estimate only when it records the source and effective date and labels the result as estimated.
+7. A collector MUST assign a new attempt number to each retry that it can observe.
+8. A collector MUST preserve the parent run and delegation lineage for each delegated session that it can observe.
+9. A collector MUST record workload identity, substrate, schedule, workflow run, generated artifacts, start, end, and terminal status when its event surface exposes them.
+10. A collector MUST declare a session gap for each required session field that its event surface cannot expose.
+11. A collector MAY record billable tool quantity, unit, or cost when the tool event exposes it.
+12. A collector MUST leave unreported tool cost unknown. It MUST NOT report the tool as free.
