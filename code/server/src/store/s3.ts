@@ -138,8 +138,13 @@ export class S3Store implements Store {
 		};
 	}
 
-	async get(key: string): Promise<Uint8Array | null> {
-		const response = await this.send("GET", this.url(key));
+	async get(key: string, version?: string): Promise<Uint8Array | null> {
+		const url = this.url(key);
+		// A delete marker hides the latest version from an unversioned GET while
+		// the retained bytes still exist; pinning the version HEAD reported reads
+		// through it.
+		if (version) url.searchParams.set("versionId", version);
+		const response = await this.send("GET", url);
 		if (response.status === 404) return null;
 		if (!response.ok) throw new StoreError(`s3 get failed: ${response.status}`, 502);
 		return new Uint8Array(await response.arrayBuffer());
@@ -149,7 +154,12 @@ export class S3Store implements Store {
 		const url = this.url(key, "retention");
 		if (version) url.searchParams.set("versionId", version);
 		const response = await this.send("GET", url);
-		if (!response.ok) return null;
+		// Absence of a lock is a 404/no-configuration answer. Any other failure
+		// is an ERROR and must not read as "unlocked" — serving evidence with
+		// the lock headers silently missing conflates a transient store fault
+		// with an unretained object.
+		if (response.status === 404) return null;
+		if (!response.ok) throw new StoreError(`s3 get retention failed: ${response.status}`, 502);
 		const xml = await response.text();
 		const mode = /<Mode>([^<]+)<\/Mode>/.exec(xml)?.[1];
 		const until = /<RetainUntilDate>([^<]+)<\/RetainUntilDate>/.exec(xml)?.[1];

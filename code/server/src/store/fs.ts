@@ -18,12 +18,19 @@ export class FilesystemStore implements Store {
 		return join(this.root, key);
 	}
 
-	async put(key: string, body: Uint8Array, _options: { contentType: string }): Promise<PutResult> {
+	async put(key: string, body: Uint8Array, options: { contentType: string }): Promise<PutResult> {
 		const path = this.path(key);
 		await mkdir(dirname(path), { recursive: true });
 		// Content-addressed and write-once by convention only: an existing key is
 		// never overwritten, but nothing stops a privileged process. SRV-001.5.2.
-		if (!(await Bun.file(path).exists())) await Bun.write(path, body);
+		if (!(await Bun.file(path).exists())) {
+			await Bun.write(path, body);
+			// S3 stores the content type as object metadata; the filesystem has
+			// no metadata, so a sidecar records it. The read path must return the
+			// type recorded at seal time, never one sniffed from the bytes.
+			// RTR-001.1.3.
+			await Bun.write(`${path}.content-type`, options.contentType);
+		}
 		return { locator: `file://${path}`, retention: null };
 	}
 
@@ -31,11 +38,14 @@ export class FilesystemStore implements Store {
 		const path = this.path(key);
 		const file = Bun.file(path);
 		if (!(await file.exists())) return null;
-		// contentType is optional; an empty string is absence, not a value.
-		return { locator: `file://${path}`, size: file.size, contentType: file.type || undefined };
+		const sidecar = Bun.file(`${path}.content-type`);
+		const recorded = (await sidecar.exists()) ? (await sidecar.text()).trim() : "";
+		// contentType is what was recorded at seal time; an empty string is
+		// absence, not a value. RTR-001.1.3.
+		return { locator: `file://${path}`, size: file.size, contentType: recorded || undefined };
 	}
 
-	async get(key: string): Promise<Uint8Array | null> {
+	async get(key: string, _version?: string): Promise<Uint8Array | null> {
 		const file = Bun.file(this.path(key));
 		if (!(await file.exists())) return null;
 		return new Uint8Array(await file.arrayBuffer());

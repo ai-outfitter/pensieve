@@ -44,7 +44,7 @@ export interface Store {
 	): Promise<PresignedPut>;
 	/** Object metadata, for the availability check SRV-001.5.10 requires of a verifier. */
 	head(key: string): Promise<HeadResult | null>;
-	get(key: string): Promise<Uint8Array | null>;
+	get(key: string, version?: string): Promise<Uint8Array | null>;
 	getRetention(key: string, version?: string): Promise<Retention | null>;
 }
 
