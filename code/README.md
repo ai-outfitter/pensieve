@@ -9,14 +9,25 @@ A Bun workspace. Three published pieces and one shared library.
 | `@pensieve/collector-claude` | `collectors/claude/` | Claude Code collector — managed-settings hooks. |
 | `@pensieve/collector-codex` | `collectors/codex/` | Codex collector — managed lifecycle hooks. |
 | `@pensieve/collector-pi` | `collectors/pi/` | Pi collector — in-process extension. |
+| `@pensieve/importer` | `importer/` | Client-only import of historical Claude Code, Codex, and pi transcripts. |
 | — | `example-repo/` | The forge gates as GitHub workflows and rulesets. Implements [CICD-001](../docs/requirements/CICD-001-evidence-gates.md). |
 
 ```sh
 bun install
-bun test          # 17 tests, each pinned to a requirement ID
+bun test          # requirement-pinned tests carry a HARD REQUIREMENT comment
 bunx tsc --noEmit
 sh scripts/build-collectors.sh dist
 ```
+
+Historical transcripts can be classified without writing anything:
+
+```sh
+bun run importer/src/cli.ts --sink <url> --token <token> --identity <machine-principal> --dry-run
+```
+
+Imported records are explicitly reconstructed (`provenance: "imported"`,
+`observed: false`) and omit `install_scope`; see
+[the importer documentation](../docs/transcript-importer.md).
 
 ## Server
 

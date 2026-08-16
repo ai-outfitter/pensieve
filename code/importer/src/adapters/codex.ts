@@ -1,0 +1,131 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { firstParsed, type HarnessAdapter, type TranscriptMetadata } from "../harness.ts";
+
+// Codex CLI: ~/.codex/sessions/YYYY/MM/DD/rollout-<iso>-<rolloutId>.jsonl.
+//
+// Unlike Claude, Codex writes a HEADER: line 1 is always
+// `{"timestamp":…,"type":"session_meta","payload":{…}}`, and every identity
+// field this adapter needs lives in that one payload. Later lines are
+// `response_item`, `event_msg`, `turn_context` and friends, none of which
+// carry session identity.
+//
+// The identity trap here is the mirror of Claude's. `payload.id` is the
+// ROLLOUT id — unique per file, equal to the uuid in the filename — while
+// `payload.session_id` is the THREAD id that several rollouts share when a
+// session is resumed. Keying `run` on `id` would split one thread into as
+// many runs as it has rollout files, so `run` prefers `session_id` and falls
+// back to `id` on 2025-era files, which predate the field.
+//
+// Two more facts about the payload, both verified across the 1293 local
+// rollouts and both able to crash a naive reader:
+//
+// - `source` is polymorphic: the string "cli"/"exec" on older and top-level
+//   sessions, an object like {"subagent":{…}} on the 659 subagent rollouts.
+//   Nothing here reads it; nothing here may assume it is a string.
+// - `git` is absent in 124 files, `{}` in 30, and missing `branch` in 64, so
+//   every level is typechecked rather than assumed.
+//
+// A RESUMED session re-emits `session_meta` mid-file with the resumed
+// rollout's values. Only the FIRST header describes the file that was
+// written, so the scanner takes the first one whole and ignores the rest —
+// per-field first-wins would splice a later header's `parent_thread_id` onto
+// the first header's ids.
+
+/** Read `key` from `payload` when it holds a non-empty string. */
+function text(payload: Record<string, unknown>, key: string): string | undefined {
+	const value = payload[key];
+	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** The header payload of a `session_meta` line, or undefined for any other line. */
+function sessionMeta(value: unknown): Record<string, unknown> | undefined {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+	const record = value as Record<string, unknown>;
+	if (record.type !== "session_meta") return undefined;
+	const payload = record.payload;
+	if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return undefined;
+	return payload as Record<string, unknown>;
+}
+
+export const codexAdapter: HarnessAdapter = {
+	harness: "codex",
+	mediaType: "application/x-ndjson",
+	// A live rollout is appended to as the session runs, so a file imported
+	// mid-session grows and returns with a new digest.
+	appendOnly: true,
+	// A reconstructed rollout observes no live session or tool events, and a
+	// conversation transcript is not a model exchange. CLC-001.7.2.
+	unsupported: ["session", "tool-call", "model-exchange", "patch", "commit-evidence"],
+
+	defaultSource: (env) => env.CODEX_SESSIONS_DIR ?? join(homedir(), ".codex", "sessions"),
+
+	// Line 1 is the discriminator and the only line that can claim the file:
+	// no Claude record and no pi header carries `type:"session_meta"` with an
+	// object payload.
+	detect(firstLines) {
+		const first = firstParsed(firstLines);
+		return first !== undefined && sessionMeta(first) !== undefined;
+	},
+
+	scanLine(value, meta) {
+		const payload = sessionMeta(value);
+		if (payload === undefined) return;
+		// First header wins, whole — a resumed session re-emits session_meta
+		// mid-file (81 of the local rollouts), and replaying a later header
+		// would splice two headers' identities into one record. The guard is
+		// its own flag, not `transcriptId`, so a header that somehow lacked
+		// `id` still counts as scanned rather than letting the next header
+		// overwrite half the fields.
+		const scratch = meta as TranscriptMetadata & { headerScanned?: boolean };
+		if (scratch.headerScanned) return;
+		scratch.headerScanned = true;
+
+		const id = text(payload, "id");
+		meta.transcriptId = id;
+		// 2025-era rollouts have no `session_id`; the rollout id is then the
+		// only thread identity there is.
+		meta.run = text(payload, "session_id") ?? id;
+		// `parent_thread_id` is NOT a run. On every real nested-subagent
+		// rollout it names the caller's rollout id — a per-file transcript
+		// identity — and on every depth-1 subagent it merely echoes the root
+		// session id this file already carries as `run`. Recording it as
+		// `parentRun` would freeze a reference that resolves to no run into
+		// the store, so it is kept transcript-scoped, echo dropped.
+		const parent = text(payload, "parent_thread_id") ?? text(payload, "forked_from_id");
+		if (parent !== undefined && parent !== meta.run && parent !== id) meta.parentTranscript = parent;
+
+		meta.cwd = text(payload, "cwd");
+		meta.harnessVersion = text(payload, "cli_version");
+		// The payload timestamp is when the session STARTED. The enclosing
+		// line's timestamp is when the header was written, and the two differ
+		// in every one of the 1293 local rollouts.
+		meta.startedAt = text(payload, "timestamp");
+
+		const git = payload.git;
+		if (typeof git === "object" && git !== null && !Array.isArray(git)) {
+			const repository = git as Record<string, unknown>;
+			meta.gitBranch = text(repository, "branch");
+			meta.gitCommit = text(repository, "commit_hash");
+		}
+	},
+
+	toRecordFields(meta: TranscriptMetadata) {
+		return {
+			run: meta.run,
+			// The rollout id, unique per file even when several rollouts share
+			// one thread.
+			transcript_id: meta.transcriptId ?? meta.run,
+			// Codex records no run-scoped parent: parent_thread_id names a
+			// rollout — a transcript — so the link stays transcript-scoped.
+			parent_run: null,
+			parent_transcript: meta.parentTranscript ?? null,
+			harness: "codex",
+			harness_version: meta.harnessVersion ?? null,
+			cwd: meta.cwd ?? null,
+			started_at: meta.startedAt ?? null,
+			// Codex records the commit its session started on; Claude does not.
+			git: { branch: meta.gitBranch ?? null, commit: meta.gitCommit ?? null },
+		};
+	},
+};

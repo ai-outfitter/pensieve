@@ -1,0 +1,4 @@
+{"type":"progress","sessionId":"session-fixture"}
+not valid json
+{"type":"user","cwd":"/work/example","version":"1.2.3"}
+{"type":"assistant","gitBranch":"feat/importer"}
