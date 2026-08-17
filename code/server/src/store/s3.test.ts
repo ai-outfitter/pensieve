@@ -214,4 +214,36 @@ describe("S3 presigned PUT against object store", () => {
 		expect(sealed.statement.retain_until).toBe(retention.retain_until);
 		expect(sealed.statement.signature).toBeTruthy();
 	});
+
+	integrationTest("accepts a streamed file body against the signed content-length", async () => {
+		// The importer PUTs `Bun.file(path)` — a stream, not a byte array —
+		// against a signature whose SignedHeaders pin content-length. This
+		// proves the runtime sends the exact signed length for a file body
+		// rather than chunked transfer encoding the store would refuse.
+		const store = new S3Store({
+			endpoint: integrationEndpoint as string,
+			bucket: Bun.env.PENSIEVE_S3_TEST_BUCKET ?? "pensieve",
+			region: Bun.env.PENSIEVE_S3_TEST_REGION ?? "us-east-1",
+			accessKeyId: Bun.env.PENSIEVE_S3_TEST_ACCESS_KEY_ID ?? "pensieve",
+			secretAccessKey: Bun.env.PENSIEVE_S3_TEST_SECRET_ACCESS_KEY ?? "pensieve-dev-secret",
+		});
+		const bytes = new TextEncoder().encode(`streamed presign ${crypto.randomUUID()}\n`);
+		const digest = sha256Hex(bytes);
+		const key = `payloads/${digest.slice(0, 2)}/${digest}`;
+		const file = `${await import("node:os").then((os) => os.tmpdir())}/pensieve-presign-stream-${digest.slice(0, 8)}.jsonl`;
+		await Bun.write(file, bytes);
+
+		const signed = await store.presignPut(key, {
+			digest,
+			size: bytes.byteLength,
+			contentType: "application/x-ndjson",
+			retainUntil: new Date(Date.now() + 8 * 86_400_000),
+			expiresSeconds: 60,
+		});
+		const response = await fetch(signed.url, { method: signed.method, headers: signed.headers, body: Bun.file(file) });
+		expect(response.status).toBe(200);
+		const head = await store.head(key);
+		expect(head?.size).toBe(bytes.byteLength);
+		expect(head?.checksumSha256).toBe(Buffer.from(digest, "hex").toString("base64"));
+	});
 });

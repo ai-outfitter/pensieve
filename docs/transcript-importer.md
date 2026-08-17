@@ -75,11 +75,15 @@ Files over 32 MiB do not travel through the sink's request body — the
 importer asks the sink for a presigned PUT scoped to the file's digest, size,
 content type, and retention, uploads straight to the object store, then asks
 the sink to seal the payload. The seal verifies the stored checksum and the
-COMPLIANCE lock before the record referencing it is posted. This keeps every
-upload below the request-body limit a deployment's ingress applies; the sink's
-store must be S3-backed and its `PENSIEVE_S3_PUBLIC_ENDPOINT` must name an
-endpoint the importing machine can reach. Files over 1 GiB are skipped as a
-sanity cap. Successfully
+COMPLIANCE lock before the record referencing it is posted. The 32 MiB
+threshold assumes the ingress in front of the sink admits bodies at least
+that large; confirm it for your own deployment. The presign path needs an
+S3-backed sink whose store is reachable from the importing machine — set
+`PENSIEVE_S3_PUBLIC_ENDPOINT` on the sink when its internal S3 endpoint is
+not routable from outside the cluster; unset, presigned URLs carry the
+internal endpoint. A sink on the development filesystem store cannot presign,
+and the importer falls back to the direct POST. Files over 1 GiB (the
+importer's sanity cap) are skipped. Successfully
 recorded payload digests are stored in
 `$XDG_STATE_HOME/pensieve/transcript-imports.json` (or
 `~/.local/state/pensieve/transcript-imports.json`); each entry records which

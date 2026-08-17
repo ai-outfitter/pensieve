@@ -44,3 +44,25 @@ describe("S3 configuration credentials", () => {
 		expect(() => loadConfig(S3_BASE)).toThrow("no credentials configured");
 	});
 });
+
+describe("S3 public endpoint", () => {
+	const CREDS = {
+		PENSIEVE_S3_ACCESS_KEY_ID: "key",
+		PENSIEVE_S3_SECRET_ACCESS_KEY: "secret",
+	};
+
+	test("loads PENSIEVE_S3_PUBLIC_ENDPOINT onto the store", () => {
+		const config = loadConfig({
+			...S3_BASE,
+			...CREDS,
+			PENSIEVE_S3_PUBLIC_ENDPOINT: "https://objects.public.test",
+		});
+		expect(config.store).toMatchObject({ kind: "s3", publicEndpoint: "https://objects.public.test" });
+	});
+
+	test("a malformed public endpoint is a startup error, not a mid-import 500", () => {
+		expect(() =>
+			loadConfig({ ...S3_BASE, ...CREDS, PENSIEVE_S3_PUBLIC_ENDPOINT: "objects.public.test" }),
+		).toThrow("PENSIEVE_S3_PUBLIC_ENDPOINT is not a URL");
+	});
+});
