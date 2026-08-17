@@ -10,6 +10,12 @@ export interface Config {
 		| {
 				kind: "s3";
 				endpoint: string;
+				/**
+				 * Externally reachable S3 endpoint that presigned URLs are signed
+				 * against, when the internal endpoint is not routable from the
+				 * uploader. Unset means presigns use `endpoint`.
+				 */
+				publicEndpoint?: string;
 				bucket: string;
 				region: string;
 				accessKeyId?: string;
@@ -71,6 +77,7 @@ function loadStore(env: Record<string, string | undefined>): Config["store"] {
 		return {
 			kind: "s3",
 			endpoint: env.PENSIEVE_S3_ENDPOINT as string,
+			publicEndpoint: env.PENSIEVE_S3_PUBLIC_ENDPOINT,
 			bucket: env.PENSIEVE_S3_BUCKET as string,
 			region: env.PENSIEVE_S3_REGION ?? env.AWS_REGION ?? "us-east-1",
 			accessKeyId: env.PENSIEVE_S3_ACCESS_KEY_ID,

@@ -3,7 +3,10 @@ import { readdir, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { HarnessAdapter, TranscriptMetadata } from "./harness.ts";
 
-export const DEFAULT_MAX_BYTES = 60 * 1024 * 1024;
+// A hard sanity cap, not an upload limit. Files above the direct-POST
+// threshold upload through a presigned PUT straight to the object store, so
+// this bounds only how much one pathological file can occupy an import run.
+export const DEFAULT_MAX_BYTES = 1024 * 1024 * 1024;
 
 /** Lines buffered for detection before a file is declared unrecognized. */
 const DETECT_WINDOW = 25;

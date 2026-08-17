@@ -71,6 +71,26 @@ describe("S3 presigned PUT", () => {
 		expect(new URL(second.url).searchParams.get("X-Amz-Credential")).toStartWith("request-2/");
 		expect(calls).toBe(2);
 	});
+
+	test("signs against the public endpoint when one is configured", async () => {
+		// SigV4 signs the Host header, so a presign built on the internal
+		// endpoint cannot be rewritten to the public one after the fact — the
+		// signature would not verify. The store must sign the public URL whole.
+		const store = new S3Store({ ...OPTIONS, publicEndpoint: "https://objects.public.test" });
+		const digest = sha256Hex("payload");
+		const result = await store.presignPut(`payloads/${digest.slice(0, 2)}/${digest}`, {
+			digest,
+			size: 7,
+			contentType: "text/plain",
+			retainUntil: new Date("2027-01-01T00:00:00.000Z"),
+			expiresSeconds: 300,
+		});
+		const url = new URL(result.url);
+
+		expect(url.origin).toBe("https://objects.public.test");
+		expect(url.pathname).toBe(`/evidence/payloads/${digest.slice(0, 2)}/${digest}`);
+		expect(url.searchParams.get("X-Amz-Signature")).toMatch(/^[0-9a-f]{64}$/);
+	});
 });
 
 const integrationEndpoint = Bun.env.PENSIEVE_S3_TEST_ENDPOINT;

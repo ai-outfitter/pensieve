@@ -71,9 +71,15 @@ malformed. Each adapter scans the parseable lines for its own metadata fields; a
 with no run identity, and a file no adapter recognizes, are skipped and named
 in the summary.
 
-Files over 60 MiB are skipped before any request. The threshold leaves headroom
-below the request-body limit a deployment's ingress applies; it is a property of
-the deployment, not of the sink, so confirm it for your own. Successfully
+Files over 32 MiB do not travel through the sink's request body — the
+importer asks the sink for a presigned PUT scoped to the file's digest, size,
+content type, and retention, uploads straight to the object store, then asks
+the sink to seal the payload. The seal verifies the stored checksum and the
+COMPLIANCE lock before the record referencing it is posted. This keeps every
+upload below the request-body limit a deployment's ingress applies; the sink's
+store must be S3-backed and its `PENSIEVE_S3_PUBLIC_ENDPOINT` must name an
+endpoint the importing machine can reach. Files over 1 GiB are skipped as a
+sanity cap. Successfully
 recorded payload digests are stored in
 `$XDG_STATE_HOME/pensieve/transcript-imports.json` (or
 `~/.local/state/pensieve/transcript-imports.json`); each entry records which

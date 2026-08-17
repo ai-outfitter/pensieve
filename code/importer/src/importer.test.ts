@@ -317,6 +317,127 @@ describe("the sink client refuses what it cannot prove", () => {
 	});
 });
 
+describe("oversized payloads upload through a presigned PUT", () => {
+	const originalFetch = globalThis.fetch;
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+	});
+
+	interface Call {
+		url: string;
+		method: string;
+		headers: Record<string, string>;
+	}
+
+	function routeFetch(handlers: Record<string, (call: Call) => Response>): Call[] {
+		const calls: Call[] = [];
+		globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			const url = String(input instanceof Request ? input.url : input);
+			const call: Call = {
+				url,
+				method: init?.method ?? "GET",
+				headers: Object.fromEntries(new Headers(init?.headers).entries()),
+			};
+			calls.push(call);
+			const handler = Object.entries(handlers).find(([prefix]) => url.startsWith(prefix))?.[1];
+			if (!handler) throw new Error(`unexpected fetch: ${url}`);
+			return handler(call);
+		}) as unknown as typeof fetch;
+		return calls;
+	}
+
+	const DIGEST = "a".repeat(64);
+	const GRANT = {
+		url: `http://objects.public.invalid/evidence/payloads/aa/${DIGEST}?X-Amz-Signature=deadbeef`,
+		headers: { "content-type": "application/x-ndjson", "x-amz-checksum-sha256": "c2ln" },
+		method: "PUT",
+		expires_at: "2027-01-01T00:00:00.000Z",
+	};
+
+	async function transcriptFile(): Promise<string> {
+		const root = await mkdtemp(join(tmpdir(), "pensieve-importer-presign-"));
+		const path = join(root, "session.jsonl");
+		await writeFile(path, '{"sessionId":"large"}\n');
+		return path;
+	}
+
+	test("a file over the threshold presigns, PUTs the grant URL whole, then seals", async () => {
+		const path = await transcriptFile();
+		const calls = routeFetch({
+			"https://sink.invalid/v0/payloads/presign": () => Response.json(GRANT, { status: 201 }),
+			"http://objects.public.invalid/": () => new Response(null, { status: 200 }),
+			[`https://sink.invalid/v0/payloads/${DIGEST}/seal`]: () =>
+				Response.json({ digest: DIGEST, statement: { locator: `s3://evidence/payloads/aa/${DIGEST}` } }, { status: 201 }),
+		});
+
+		const sink = new HttpImportSink("https://sink.invalid", "t", 10);
+		const payload = await sink.upload(path, DIGEST, 22, "application/x-ndjson");
+
+		expect(calls.map((call) => call.method)).toEqual(["POST", "PUT", "POST"]);
+		// The PUT goes to the URL the sink signed, unmodified, with the signed
+		// headers — the store, not the client, enforces digest and lock.
+		expect(calls[1]?.url).toBe(GRANT.url);
+		expect(calls[1]?.headers["x-amz-checksum-sha256"]).toBe("c2ln");
+		expect(payload).toEqual({
+			digest: DIGEST,
+			media_type: "application/x-ndjson",
+			size: 22,
+			locator: `s3://evidence/payloads/aa/${DIGEST}`,
+		});
+	});
+
+	test("a file at or under the threshold still posts through the sink", async () => {
+		const path = await transcriptFile();
+		const calls = routeFetch({
+			"https://sink.invalid/v0/payloads": () =>
+				Response.json({ digest: DIGEST, locator: "s3://evidence/payloads/aa" }, { status: 201 }),
+		});
+
+		await new HttpImportSink("https://sink.invalid", "t", 22).upload(path, DIGEST, 22, "application/x-ndjson");
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.url).toBe("https://sink.invalid/v0/payloads");
+	});
+
+	test("a store rejection of the presigned PUT fails the file before any seal", async () => {
+		const path = await transcriptFile();
+		const calls = routeFetch({
+			"https://sink.invalid/v0/payloads/presign": () => Response.json(GRANT, { status: 201 }),
+			"http://objects.public.invalid/": () => new Response("checksum mismatch", { status: 400 }),
+		});
+
+		await expect(new HttpImportSink("https://sink.invalid", "t", 10).upload(path, DIGEST, 22, "application/x-ndjson")).rejects.toThrow(
+			/presigned upload rejected: 400/,
+		);
+		expect(calls.filter((call) => call.url.includes("/seal"))).toHaveLength(0);
+	});
+
+	test("a seal whose digest disagrees fails the file", async () => {
+		const path = await transcriptFile();
+		routeFetch({
+			"https://sink.invalid/v0/payloads/presign": () => Response.json(GRANT, { status: 201 }),
+			"http://objects.public.invalid/": () => new Response(null, { status: 200 }),
+			[`https://sink.invalid/v0/payloads/${DIGEST}/seal`]: () =>
+				Response.json({ digest: "b".repeat(64), statement: { locator: "s3://x" } }, { status: 201 }),
+		});
+
+		await expect(new HttpImportSink("https://sink.invalid", "t", 10).upload(path, DIGEST, 22, "application/x-ndjson")).rejects.toThrow(
+			/sink sealed payload digest/,
+		);
+	});
+
+	test("a store that cannot presign says so rather than failing opaquely", async () => {
+		const path = await transcriptFile();
+		routeFetch({
+			"https://sink.invalid/v0/payloads/presign": () =>
+				Response.json({ error: "this store does not support presigned uploads" }, { status: 501 }),
+		});
+
+		await expect(new HttpImportSink("https://sink.invalid", "t", 10).upload(path, DIGEST, 22, "application/x-ndjson")).rejects.toThrow(
+			/cannot presign/,
+		);
+	});
+});
+
 describe("composite run identity", () => {
 	// THIS TEST VALIDATES A HARD REQUIREMENT (SRV-001.3.5)
 	// YOU MUST NOT MODIFY THIS TEST UNLESS THE REQUIREMENT CHANGES

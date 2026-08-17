@@ -93,14 +93,27 @@ interface ImportState {
 	>;
 }
 
+/**
+ * Above this size the payload goes to the object store through a presigned
+ * PUT instead of through the sink's request body. The sink sits behind an
+ * ingress with a bounded body size, and the largest local rollouts exceed it;
+ * the threshold stays under that bound so a direct POST never hits it.
+ */
+export const PRESIGN_OVER_BYTES = 32 * 1024 * 1024;
+
 export class HttpImportSink implements ImportSink {
 	private readonly base: string;
 
-	constructor(sink: string, private readonly token: string) {
+	constructor(
+		sink: string,
+		private readonly token: string,
+		private readonly presignOverBytes = PRESIGN_OVER_BYTES,
+	) {
 		this.base = sink.replace(/\/$/, "");
 	}
 
 	async upload(path: string, expectedDigest: string, size: number, mediaType: string): Promise<PayloadReference> {
+		if (size > this.presignOverBytes) return this.uploadPresigned(path, expectedDigest, size, mediaType);
 		const response = await fetch(`${this.base}/v0/payloads`, {
 			method: "POST",
 			headers: { authorization: `Bearer ${this.token}`, "content-type": mediaType },
@@ -116,6 +129,62 @@ export class HttpImportSink implements ImportSink {
 		}
 		if (typeof result.locator !== "string") throw new Error("sink returned no payload locator");
 		return { digest: expectedDigest, media_type: mediaType, size, locator: result.locator };
+	}
+
+	/**
+	 * Presign → PUT → seal. The store verifies the digest itself: the presigned
+	 * request pins `x-amz-checksum-sha256`, so a file that changed between
+	 * hashing and upload is refused by the store, and the seal step re-checks
+	 * the stored checksum and the COMPLIANCE lock before vouching for it.
+	 */
+	private async uploadPresigned(
+		path: string,
+		expectedDigest: string,
+		size: number,
+		mediaType: string,
+	): Promise<PayloadReference> {
+		const presign = await fetch(`${this.base}/v0/payloads/presign`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
+			body: JSON.stringify({ digest: expectedDigest, size, content_type: mediaType }),
+		});
+		if (presign.status === 401 || presign.status === 403) {
+			throw new FatalImportError(`presign refused: ${presign.status} ${await presign.text()}`);
+		}
+		if (presign.status === 501) {
+			throw new Error(
+				`presign rejected: 501 ${await presign.text()}. ` +
+					"The sink's store cannot presign; files this large need an S3-backed sink.",
+			);
+		}
+		if (!presign.ok) throw new Error(`presign rejected: ${presign.status} ${await presign.text()}`);
+		const grant = (await presign.json()) as { url?: unknown; headers?: unknown };
+		if (typeof grant.url !== "string" || typeof grant.headers !== "object" || grant.headers === null) {
+			throw new Error("sink returned a malformed presign grant");
+		}
+
+		const put = await fetch(grant.url, {
+			method: "PUT",
+			headers: grant.headers as Record<string, string>,
+			body: Bun.file(path),
+		});
+		if (!put.ok) throw new Error(`presigned upload rejected: ${put.status} ${await put.text()}`);
+
+		const seal = await fetch(`${this.base}/v0/payloads/${expectedDigest}/seal`, {
+			method: "POST",
+			headers: { authorization: `Bearer ${this.token}` },
+		});
+		if (seal.status === 401 || seal.status === 403) {
+			throw new FatalImportError(`seal refused: ${seal.status} ${await seal.text()}`);
+		}
+		if (!seal.ok) throw new Error(`seal rejected: ${seal.status} ${await seal.text()}`);
+		const sealed = (await seal.json()) as { digest?: unknown; statement?: { locator?: unknown } };
+		if (sealed.digest !== expectedDigest) {
+			throw new Error(`sink sealed payload digest ${String(sealed.digest)}, expected ${expectedDigest}`);
+		}
+		const locator = sealed.statement?.locator;
+		if (typeof locator !== "string") throw new Error("seal statement carries no payload locator");
+		return { digest: expectedDigest, media_type: mediaType, size, locator };
 	}
 
 	async postRecord(record: Record<string, unknown>): Promise<RecordReceipt> {
@@ -163,7 +232,7 @@ async function saveState(path: string, state: ImportState): Promise<void> {
 function skipReason(item: TranscriptInspection): string | undefined {
 	switch (item.skipReason) {
 		case "empty": return "empty file";
-		case "too-large": return "exceeds safe upload threshold";
+		case "too-large": return "exceeds the import sanity cap";
 		case "unknown-harness": return "no harness adapter recognizes this file";
 		case "missing-run":
 			return item.malformedLines > 0
