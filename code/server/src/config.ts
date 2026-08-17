@@ -10,6 +10,12 @@ export interface Config {
 		| {
 				kind: "s3";
 				endpoint: string;
+				/**
+				 * Externally reachable S3 endpoint that presigned URLs are signed
+				 * against, when the internal endpoint is not routable from the
+				 * uploader. Unset means presigns use `endpoint`.
+				 */
+				publicEndpoint?: string;
 				bucket: string;
 				region: string;
 				accessKeyId?: string;
@@ -68,9 +74,20 @@ function loadStore(env: Record<string, string | undefined>): Config["store"] {
 				"S3 store selected but no credentials configured; set PENSIEVE_S3_ACCESS_KEY_ID/PENSIEVE_S3_SECRET_ACCESS_KEY or AWS_ROLE_ARN/AWS_WEB_IDENTITY_TOKEN_FILE",
 			);
 		}
+		// A malformed public endpoint would otherwise surface as a 500 on the
+		// first oversized payload, deep into an import run — the same quiet
+		// failure the explicit store selection above exists to prevent.
+		if (env.PENSIEVE_S3_PUBLIC_ENDPOINT !== undefined) {
+			try {
+				new URL(env.PENSIEVE_S3_PUBLIC_ENDPOINT);
+			} catch {
+				throw new Error(`PENSIEVE_S3_PUBLIC_ENDPOINT is not a URL: "${env.PENSIEVE_S3_PUBLIC_ENDPOINT}"`);
+			}
+		}
 		return {
 			kind: "s3",
 			endpoint: env.PENSIEVE_S3_ENDPOINT as string,
+			publicEndpoint: env.PENSIEVE_S3_PUBLIC_ENDPOINT,
 			bucket: env.PENSIEVE_S3_BUCKET as string,
 			region: env.PENSIEVE_S3_REGION ?? env.AWS_REGION ?? "us-east-1",
 			accessKeyId: env.PENSIEVE_S3_ACCESS_KEY_ID,

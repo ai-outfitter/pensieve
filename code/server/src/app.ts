@@ -19,6 +19,7 @@ export async function createApp(config: Config): Promise<App> {
 		config.store.kind === "s3"
 			? new S3Store({
 					endpoint: config.store.endpoint,
+					publicEndpoint: config.store.publicEndpoint,
 					bucket: config.store.bucket,
 					region: config.store.region,
 					accessKeyId: config.store.accessKeyId,

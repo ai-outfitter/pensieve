@@ -16,6 +16,14 @@ import {
 
 export interface S3StoreOptions extends CredentialSourceOptions {
 	endpoint: string;
+	/**
+	 * Endpoint presigned URLs are signed against, for deployments where
+	 * `endpoint` names a cluster-internal address the uploader cannot reach.
+	 * SigV4 signs the Host header, so the URL handed out must carry the host
+	 * the uploader will actually connect to — rewriting it after signing
+	 * invalidates the signature. Every sink-side operation stays on `endpoint`.
+	 */
+	publicEndpoint?: string;
 	bucket: string;
 	/** Path style is required for MinIO and for any endpoint without bucket DNS. */
 	pathStyle?: boolean;
@@ -45,7 +53,16 @@ export class S3Store implements Store {
 	}
 
 	private url(key: string, query?: string): URL {
-		const base = this.options.endpoint.replace(/\/$/, "");
+		return this.buildUrl(this.options.endpoint, key, query);
+	}
+
+	/** The URL an external uploader is handed; identical to `url` without a public endpoint. */
+	private publicUrl(key: string): URL {
+		return this.buildUrl(this.options.publicEndpoint ?? this.options.endpoint, key);
+	}
+
+	private buildUrl(endpoint: string, key: string, query?: string): URL {
+		const base = endpoint.replace(/\/$/, "");
 		const path =
 			this.options.pathStyle === false
 				? `${base}/${key}`
@@ -112,7 +129,7 @@ export class S3Store implements Store {
 			"x-amz-object-lock-retain-until-date": options.retainUntil.toISOString(),
 		};
 		const url = presignRequest(
-			{ method: "PUT", url: this.url(key), headers, expiresSeconds: options.expiresSeconds },
+			{ method: "PUT", url: this.publicUrl(key), headers, expiresSeconds: options.expiresSeconds },
 			await this.credentials(),
 			now,
 		);

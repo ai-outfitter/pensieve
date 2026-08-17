@@ -71,6 +71,26 @@ describe("S3 presigned PUT", () => {
 		expect(new URL(second.url).searchParams.get("X-Amz-Credential")).toStartWith("request-2/");
 		expect(calls).toBe(2);
 	});
+
+	test("signs against the public endpoint when one is configured", async () => {
+		// SigV4 signs the Host header, so a presign built on the internal
+		// endpoint cannot be rewritten to the public one after the fact — the
+		// signature would not verify. The store must sign the public URL whole.
+		const store = new S3Store({ ...OPTIONS, publicEndpoint: "https://objects.public.test" });
+		const digest = sha256Hex("payload");
+		const result = await store.presignPut(`payloads/${digest.slice(0, 2)}/${digest}`, {
+			digest,
+			size: 7,
+			contentType: "text/plain",
+			retainUntil: new Date("2027-01-01T00:00:00.000Z"),
+			expiresSeconds: 300,
+		});
+		const url = new URL(result.url);
+
+		expect(url.origin).toBe("https://objects.public.test");
+		expect(url.pathname).toBe(`/evidence/payloads/${digest.slice(0, 2)}/${digest}`);
+		expect(url.searchParams.get("X-Amz-Signature")).toMatch(/^[0-9a-f]{64}$/);
+	});
 });
 
 const integrationEndpoint = Bun.env.PENSIEVE_S3_TEST_ENDPOINT;
@@ -193,5 +213,37 @@ describe("S3 presigned PUT against object store", () => {
 		expect(sealed.statement.object_version).toBe(head.version);
 		expect(sealed.statement.retain_until).toBe(retention.retain_until);
 		expect(sealed.statement.signature).toBeTruthy();
+	});
+
+	integrationTest("accepts a streamed file body against the signed content-length", async () => {
+		// The importer PUTs `Bun.file(path)` — a stream, not a byte array —
+		// against a signature whose SignedHeaders pin content-length. This
+		// proves the runtime sends the exact signed length for a file body
+		// rather than chunked transfer encoding the store would refuse.
+		const store = new S3Store({
+			endpoint: integrationEndpoint as string,
+			bucket: Bun.env.PENSIEVE_S3_TEST_BUCKET ?? "pensieve",
+			region: Bun.env.PENSIEVE_S3_TEST_REGION ?? "us-east-1",
+			accessKeyId: Bun.env.PENSIEVE_S3_TEST_ACCESS_KEY_ID ?? "pensieve",
+			secretAccessKey: Bun.env.PENSIEVE_S3_TEST_SECRET_ACCESS_KEY ?? "pensieve-dev-secret",
+		});
+		const bytes = new TextEncoder().encode(`streamed presign ${crypto.randomUUID()}\n`);
+		const digest = sha256Hex(bytes);
+		const key = `payloads/${digest.slice(0, 2)}/${digest}`;
+		const file = `${await import("node:os").then((os) => os.tmpdir())}/pensieve-presign-stream-${digest.slice(0, 8)}.jsonl`;
+		await Bun.write(file, bytes);
+
+		const signed = await store.presignPut(key, {
+			digest,
+			size: bytes.byteLength,
+			contentType: "application/x-ndjson",
+			retainUntil: new Date(Date.now() + 8 * 86_400_000),
+			expiresSeconds: 60,
+		});
+		const response = await fetch(signed.url, { method: signed.method, headers: signed.headers, body: Bun.file(file) });
+		expect(response.status).toBe(200);
+		const head = await store.head(key);
+		expect(head?.size).toBe(bytes.byteLength);
+		expect(head?.checksumSha256).toBe(Buffer.from(digest, "hex").toString("base64"));
 	});
 });

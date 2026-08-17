@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { claudeAdapter } from "./adapters/claude.ts";
-import { FatalImportError, HttpImportSink, importTranscripts, type ImportOptions, type ImportSink } from "./importer.ts";
-import { inspectTranscript } from "./transcript.ts";
+import { FatalImportError, HttpImportSink, importTranscripts, PRESIGN_OVER_BYTES, type ImportOptions, type ImportSink } from "./importer.ts";
+import { DEFAULT_MAX_BYTES, inspectTranscript } from "./transcript.ts";
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "..", "test", "fixtures");
 
@@ -314,6 +314,168 @@ describe("the sink client refuses what it cannot prove", () => {
 		await expect(new HttpImportSink("https://sink.invalid", "t").postRecord({ kind: "transcript" })).rejects.toThrow(
 			FatalImportError,
 		);
+	});
+});
+
+describe("oversized payloads upload through a presigned PUT", () => {
+	const originalFetch = globalThis.fetch;
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+	});
+
+	interface Call {
+		url: string;
+		method: string;
+		headers: Record<string, string>;
+	}
+
+	function routeFetch(handlers: Record<string, (call: Call) => Response>): Call[] {
+		const calls: Call[] = [];
+		globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+			const url = String(input instanceof Request ? input.url : input);
+			const call: Call = {
+				url,
+				method: init?.method ?? "GET",
+				headers: Object.fromEntries(new Headers(init?.headers).entries()),
+			};
+			calls.push(call);
+			const handler = Object.entries(handlers).find(([prefix]) => url.startsWith(prefix))?.[1];
+			if (!handler) throw new Error(`unexpected fetch: ${url}`);
+			return handler(call);
+		}) as unknown as typeof fetch;
+		return calls;
+	}
+
+	const DIGEST = "a".repeat(64);
+	const OVER = PRESIGN_OVER_BYTES + 1;
+	const GRANT = {
+		url: `http://objects.public.invalid/evidence/payloads/aa/${DIGEST}?X-Amz-Signature=deadbeef`,
+		// The real grant signs content-length too; the client must pass every
+		// signed header through untouched.
+		headers: {
+			"content-length": String(OVER),
+			"content-type": "application/x-ndjson",
+			"x-amz-checksum-sha256": "c2ln",
+		},
+		method: "PUT",
+		expires_at: "2027-01-01T00:00:00.000Z",
+	};
+
+	async function transcriptFile(): Promise<string> {
+		const root = await mkdtemp(join(tmpdir(), "pensieve-importer-presign-"));
+		const path = join(root, "session.jsonl");
+		await writeFile(path, '{"sessionId":"large"}\n');
+		return path;
+	}
+
+	test("the presign threshold stays under the inspection sanity cap", () => {
+		// Lowering DEFAULT_MAX_BYTES below the threshold would skip exactly
+		// the files the presign path exists for, silently.
+		expect(PRESIGN_OVER_BYTES).toBeLessThan(DEFAULT_MAX_BYTES);
+	});
+
+	test("a file over the threshold presigns, PUTs the grant URL whole, then seals", async () => {
+		const path = await transcriptFile();
+		const calls = routeFetch({
+			"https://sink.invalid/v0/payloads/presign": () => Response.json(GRANT, { status: 201 }),
+			"http://objects.public.invalid/": () => new Response(null, { status: 200 }),
+			[`https://sink.invalid/v0/payloads/${DIGEST}/seal`]: () =>
+				Response.json({ digest: DIGEST, statement: { locator: `s3://evidence/payloads/aa/${DIGEST}` } }, { status: 201 }),
+		});
+
+		const sink = new HttpImportSink("https://sink.invalid", "t");
+		const payload = await sink.upload(path, DIGEST, OVER, "application/x-ndjson");
+
+		expect(calls.map((call) => call.method)).toEqual(["POST", "PUT", "POST"]);
+		// The PUT goes to the URL the sink signed, unmodified, with the signed
+		// headers — the store, not the client, enforces digest and lock.
+		expect(calls[1]?.url).toBe(GRANT.url);
+		expect(calls[1]?.headers["x-amz-checksum-sha256"]).toBe("c2ln");
+		expect(payload).toEqual({
+			digest: DIGEST,
+			media_type: "application/x-ndjson",
+			size: OVER,
+			locator: `s3://evidence/payloads/aa/${DIGEST}`,
+		});
+	});
+
+	test("a file at the threshold still posts through the sink", async () => {
+		const path = await transcriptFile();
+		const calls = routeFetch({
+			"https://sink.invalid/v0/payloads": () =>
+				Response.json({ digest: DIGEST, locator: "s3://evidence/payloads/aa" }, { status: 201 }),
+		});
+
+		await new HttpImportSink("https://sink.invalid", "t").upload(path, DIGEST, PRESIGN_OVER_BYTES, "application/x-ndjson");
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.url).toBe("https://sink.invalid/v0/payloads");
+	});
+
+	test("a store rejection of the presigned PUT fails the file before any seal", async () => {
+		const path = await transcriptFile();
+		const calls = routeFetch({
+			"https://sink.invalid/v0/payloads/presign": () => Response.json(GRANT, { status: 201 }),
+			"http://objects.public.invalid/": () => new Response("checksum mismatch", { status: 400 }),
+		});
+
+		await expect(new HttpImportSink("https://sink.invalid", "t").upload(path, DIGEST, OVER, "application/x-ndjson")).rejects.toThrow(
+			/presigned upload rejected: 400/,
+		);
+		expect(calls.filter((call) => call.url.includes("/seal"))).toHaveLength(0);
+	});
+
+	test("an unreachable presigned host names the host and the knob that fixes it", async () => {
+		const path = await transcriptFile();
+		routeFetch({
+			"https://sink.invalid/v0/payloads/presign": () => Response.json(GRANT, { status: 201 }),
+			"http://objects.public.invalid/": () => {
+				// Bun's fetch throws on connection failure with a message that
+				// names neither the URL nor the host.
+				throw new Error("Unable to connect. Is the computer able to access the url?");
+			},
+		});
+
+		await expect(new HttpImportSink("https://sink.invalid", "t").upload(path, DIGEST, OVER, "application/x-ndjson")).rejects.toThrow(
+			/presigned upload to objects\.public\.invalid failed: .*PENSIEVE_S3_PUBLIC_ENDPOINT/,
+		);
+	});
+
+	// THIS TEST VALIDATES A HARD REQUIREMENT (SRV-001.5.5)
+	// YOU MUST NOT MODIFY THIS TEST UNLESS THE REQUIREMENT CHANGES
+	// The digest-echo obligation holds on the presign path exactly as it does
+	// on the direct POST: a record must never be bound to bytes the store
+	// identifies differently.
+	test("a seal whose digest disagrees fails the file", async () => {
+		const path = await transcriptFile();
+		routeFetch({
+			"https://sink.invalid/v0/payloads/presign": () => Response.json(GRANT, { status: 201 }),
+			"http://objects.public.invalid/": () => new Response(null, { status: 200 }),
+			[`https://sink.invalid/v0/payloads/${DIGEST}/seal`]: () =>
+				Response.json({ digest: "b".repeat(64), statement: { locator: "s3://x" } }, { status: 201 }),
+		});
+
+		await expect(new HttpImportSink("https://sink.invalid", "t").upload(path, DIGEST, OVER, "application/x-ndjson")).rejects.toThrow(
+			/sink sealed payload digest/,
+		);
+	});
+
+	test("a store that cannot presign falls back to the direct POST", async () => {
+		const path = await transcriptFile();
+		// The development filesystem store returns 501; it also sits behind no
+		// ingress, so the body-size reason for presigning does not apply.
+		const calls = routeFetch({
+			"https://sink.invalid/v0/payloads/presign": () =>
+				Response.json({ error: "this store does not support presigned uploads" }, { status: 501 }),
+			"https://sink.invalid/v0/payloads": () =>
+				Response.json({ digest: DIGEST, locator: "file:///payloads/aa" }, { status: 201 }),
+		});
+
+		const payload = await new HttpImportSink("https://sink.invalid", "t").upload(path, DIGEST, OVER, "application/x-ndjson");
+		expect(payload.locator).toBe("file:///payloads/aa");
+		expect(calls.map((call) => call.url)).toEqual([
+			"https://sink.invalid/v0/payloads/presign",
+			"https://sink.invalid/v0/payloads",
+		]);
 	});
 });
 

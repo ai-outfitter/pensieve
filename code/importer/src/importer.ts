@@ -93,22 +93,59 @@ interface ImportState {
 	>;
 }
 
+/**
+ * Above this size the payload goes to the object store through a presigned
+ * PUT instead of through the sink's request body. The sink sits behind an
+ * ingress with a bounded body size, and the largest local rollouts exceed it;
+ * the threshold stays under that bound so a direct POST never hits it.
+ */
+export const PRESIGN_OVER_BYTES = 32 * 1024 * 1024;
+
 export class HttpImportSink implements ImportSink {
 	private readonly base: string;
 
-	constructor(sink: string, private readonly token: string) {
+	constructor(
+		sink: string,
+		private readonly token: string,
+	) {
 		this.base = sink.replace(/\/$/, "");
 	}
 
-	async upload(path: string, expectedDigest: string, size: number, mediaType: string): Promise<PayloadReference> {
-		const response = await fetch(`${this.base}/v0/payloads`, {
-			method: "POST",
-			headers: { authorization: `Bearer ${this.token}`, "content-type": mediaType },
-			body: Bun.file(path),
-		});
+	/**
+	 * One run-wide policy for requests to the SINK: a refused credential is
+	 * fatal (see FatalImportError above), any other failure fails one file.
+	 * The direct-to-store presigned PUT deliberately does not go through
+	 * here — a 403 from the store means an expired or skewed signature,
+	 * a per-file failure, never a run-fatal credential problem.
+	 */
+	private async sinkFetch(path: string, init: RequestInit, what: string, fatalHint = ""): Promise<Response> {
+		const response = await fetch(`${this.base}${path}`, init);
 		if (response.status === 401 || response.status === 403) {
-			throw new FatalImportError(`payload refused: ${response.status} ${await response.text()}`);
+			throw new FatalImportError(`${what} refused: ${response.status} ${await response.text()}${fatalHint}`);
 		}
+		return response;
+	}
+
+	async upload(path: string, expectedDigest: string, size: number, mediaType: string): Promise<PayloadReference> {
+		if (size > PRESIGN_OVER_BYTES) return this.uploadPresigned(path, expectedDigest, size, mediaType);
+		return this.uploadDirect(path, expectedDigest, size, mediaType);
+	}
+
+	private async uploadDirect(
+		path: string,
+		expectedDigest: string,
+		size: number,
+		mediaType: string,
+	): Promise<PayloadReference> {
+		const response = await this.sinkFetch(
+			"/v0/payloads",
+			{
+				method: "POST",
+				headers: { authorization: `Bearer ${this.token}`, "content-type": mediaType },
+				body: Bun.file(path),
+			},
+			"payload",
+		);
 		if (!response.ok) throw new Error(`payload rejected: ${response.status} ${await response.text()}`);
 		const result = (await response.json()) as { digest?: unknown; locator?: unknown };
 		if (result.digest !== expectedDigest) {
@@ -118,19 +155,88 @@ export class HttpImportSink implements ImportSink {
 		return { digest: expectedDigest, media_type: mediaType, size, locator: result.locator };
 	}
 
-	async postRecord(record: Record<string, unknown>): Promise<RecordReceipt> {
-		const response = await fetch(`${this.base}/v0/records`, {
-			method: "POST",
-			headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
-			body: JSON.stringify(record),
-		});
-		if (response.status === 401 || response.status === 403) {
-			throw new FatalImportError(
-				`record refused: ${response.status} ${await response.text()}. ` +
-					"The payload is already stored and cannot be removed. Check that --identity " +
-					"names the principal --token authenticates.",
+	/**
+	 * Presign → PUT → seal. The store verifies the digest itself: the presigned
+	 * request pins `x-amz-checksum-sha256`, so a file that changed between
+	 * hashing and upload is refused by the store, and the seal step re-checks
+	 * the stored checksum and the COMPLIANCE lock before vouching for it.
+	 */
+	private async uploadPresigned(
+		path: string,
+		expectedDigest: string,
+		size: number,
+		mediaType: string,
+	): Promise<PayloadReference> {
+		const presign = await this.sinkFetch(
+			"/v0/payloads/presign",
+			{
+				method: "POST",
+				headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
+				body: JSON.stringify({ digest: expectedDigest, size, content_type: mediaType }),
+			},
+			"presign",
+		);
+		if (presign.status === 501) {
+			// The development filesystem store cannot presign. It also sits
+			// behind no ingress, so the body-size reason for presigning does
+			// not apply — fall back to the direct POST rather than losing
+			// files that imported fine before the presign path existed.
+			await presign.text();
+			return this.uploadDirect(path, expectedDigest, size, mediaType);
+		}
+		if (!presign.ok) throw new Error(`presign rejected: ${presign.status} ${await presign.text()}`);
+		const grant = (await presign.json()) as { url?: unknown; headers?: unknown };
+		if (typeof grant.url !== "string" || typeof grant.headers !== "object" || grant.headers === null) {
+			throw new Error("sink returned a malformed presign grant");
+		}
+
+		let put: Response;
+		try {
+			put = await fetch(grant.url, {
+				method: "PUT",
+				headers: grant.headers as Record<string, string>,
+				body: Bun.file(path),
+			});
+		} catch (error) {
+			// A connection failure here is almost always the deployment, not
+			// the file: the grant names the host the sink signed, and that
+			// host must resolve and be reachable from THIS machine.
+			const host = new URL(grant.url).host;
+			throw new Error(
+				`presigned upload to ${host} failed: ${error instanceof Error ? error.message : String(error)}. ` +
+					"The sink signs upload URLs against PENSIEVE_S3_PUBLIC_ENDPOINT (falling back to its " +
+					"internal S3 endpoint); that host must resolve and be reachable from the importing machine.",
 			);
 		}
+		if (!put.ok) throw new Error(`presigned upload rejected: ${put.status} ${await put.text()}`);
+
+		const seal = await this.sinkFetch(
+			`/v0/payloads/${expectedDigest}/seal`,
+			{ method: "POST", headers: { authorization: `Bearer ${this.token}` } },
+			"seal",
+		);
+		if (!seal.ok) throw new Error(`seal rejected: ${seal.status} ${await seal.text()}`);
+		const sealed = (await seal.json()) as { digest?: unknown; statement?: { locator?: unknown } };
+		if (sealed.digest !== expectedDigest) {
+			throw new Error(`sink sealed payload digest ${String(sealed.digest)}, expected ${expectedDigest}`);
+		}
+		const locator = sealed.statement?.locator;
+		if (typeof locator !== "string") throw new Error("seal statement carries no payload locator");
+		return { digest: expectedDigest, media_type: mediaType, size, locator };
+	}
+
+	async postRecord(record: Record<string, unknown>): Promise<RecordReceipt> {
+		const response = await this.sinkFetch(
+			"/v0/records",
+			{
+				method: "POST",
+				headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
+				body: JSON.stringify(record),
+			},
+			"record",
+			". The payload is already stored and cannot be removed. Check that --identity " +
+				"names the principal --token authenticates.",
+		);
 		if (!response.ok) throw new Error(`record rejected: ${response.status} ${await response.text()}`);
 		const result = (await response.json()) as { digest?: unknown };
 		if (typeof result.digest !== "string" || !/^[0-9a-f]{64}$/.test(result.digest)) {
@@ -163,7 +269,7 @@ async function saveState(path: string, state: ImportState): Promise<void> {
 function skipReason(item: TranscriptInspection): string | undefined {
 	switch (item.skipReason) {
 		case "empty": return "empty file";
-		case "too-large": return "exceeds safe upload threshold";
+		case "too-large": return "exceeds the import sanity cap";
 		case "unknown-harness": return "no harness adapter recognizes this file";
 		case "missing-run":
 			return item.malformedLines > 0
@@ -320,7 +426,15 @@ export async function importTranscripts(
 			if (!item.digest) throw new Error("eligible transcript has no digest");
 			seen.add(item.digest);
 			if (options.dryRun) {
-				decision = { kind: "would-import", path: item.path, reason: "eligible", digest: item.digest };
+				decision = {
+					kind: "would-import",
+					path: item.path,
+					// The presign path needs an S3-backed sink and a reachable
+					// public endpoint; the dry run is where an operator learns
+					// which files depend on that before anything uploads.
+					reason: item.size > PRESIGN_OVER_BYTES ? "eligible (presigned upload)" : "eligible",
+					digest: item.digest,
+				};
 			} else {
 				try {
 					const importedAt = state.payloads[item.digest]?.imported_at ?? (options.now ?? (() => new Date()))().toISOString();

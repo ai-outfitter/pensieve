@@ -5,7 +5,7 @@ import { claudeAdapter } from "./adapters/claude.ts";
 import { codexAdapter } from "./adapters/codex.ts";
 import { piAdapter } from "./adapters/pi.ts";
 import type { HarnessAdapter } from "./harness.ts";
-import { importTranscripts, type ImportOptions, type ImportSummary } from "./importer.ts";
+import { importTranscripts, PRESIGN_OVER_BYTES, type ImportOptions, type ImportSummary } from "./importer.ts";
 import { DEFAULT_MAX_BYTES } from "./transcript.ts";
 
 // Registration is here, at the import site — the shared engine has no
@@ -37,7 +37,8 @@ Options:
   --since DATE           only files modified on or after this ISO date
   -h, --help             show this help
 
-Files larger than ${DEFAULT_MAX_BYTES / 1024 / 1024} MiB are skipped before upload. Source files are
+Files over ${PRESIGN_OVER_BYTES / 1024 / 1024} MiB upload through a presigned PUT straight to the
+object store; files over ${DEFAULT_MAX_BYTES / 1024 / 1024} MiB are skipped entirely. Source files are
 opened read-only and are never modified or deleted. Successful payload digests
 are checkpointed under the user's state directory so reruns report and skip them.
 `;
