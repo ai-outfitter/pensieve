@@ -149,3 +149,37 @@ Terms used throughout:
 3. The sink MUST NOT render a control register.
 4. The sink MUST NOT verify graph lineage between node inputs and node outputs. It holds the artifacts that lineage rules reference.
 5. A dashboard MUST be a view over stored records. It MUST NOT be the record.
+
+### SRV-001.13: Usage Accounting Records
+
+> **Implementation status (2026-08-16):** These statements specify fields on
+> the existing `model-exchange`, `tool-call`, and `session` record kinds. No
+> server route, persisted schema, collector, or test proves them yet.
+
+1. Usage accounting MUST use the existing `model-exchange`, `tool-call`, and `session` record kinds. It MUST NOT require a separate billing or usage record kind.
+2. A `model-exchange` record MUST declare `exchange_id`, `provider`, `requested_model`, `resolved_model`, and `parent_run`.
+3. `exchange_id` MUST identify one provider exchange uniquely within its run and attempt.
+4. `requested_model` and `resolved_model` MUST remain separate. The record MUST NOT replace the requested model with the resolved model.
+5. `parent_run` MUST identify the delegating run when delegation occurs. It MUST be `null` for a top-level run.
+6. A `model-exchange` record MUST declare `usage_state` as `complete`, `partial`, or `unavailable`.
+7. A `model-exchange` record MUST contain `input_tokens`, `cache_read_tokens`, `cache_write_tokens`, `output_tokens`, and `reasoning_tokens`.
+8. Each token counter MUST be a non-negative integer or `null`. A missing counter MUST NOT default to zero.
+9. A zero token counter MUST mean that the provider or harness reported zero. It MUST NOT mean that the counter was unavailable.
+10. A `model-exchange` record MUST contain a `usage_gaps` list. The list MUST name every usage or identity field that the harness or provider could not expose.
+11. `usage_state` MUST be `complete` only when `usage_gaps` is empty and every applicable token counter is present.
+12. `usage_state` MUST be `partial` when at least one token counter is present and `usage_gaps` is not empty.
+13. `usage_state` MUST be `unavailable` when no token counter is available. Each token counter MUST then be `null`, and `usage_gaps` MUST identify the missing fields.
+14. Provider-reported cost MUST be stored separately as `provider_cost`, with an amount and currency. Its amount MUST be non-negative.
+15. A record MUST identify `provider_cost` as provider-reported. It MUST NOT present a derived estimate as a provider-reported charge.
+16. A derived cost estimate MUST be stored separately from `provider_cost`. It MUST name the price-book source and effective date.
+17. A derived estimate MUST identify itself as estimated. It MUST NOT replace, alter, or backfill `provider_cost`.
+18. A `session` record MUST declare `workload_id`, `substrate`, `started_at`, `ended_at`, `terminal_status`, `attempt`, `schedule`, `workflow_run`, `generated_artifacts`, and `parent_run`.
+19. `attempt` MUST be a positive integer within the workload run. A retry MUST create a new attempt and MUST NOT replace the failed or cancelled attempt.
+20. `schedule` and `workflow_run` MAY be `null` when the run was not scheduled or did not run in a workflow. An unavailable value MUST be `null` and MUST appear in the session gap list.
+21. `generated_artifacts` MUST distinguish an observed empty list from an unavailable artifact list. An unavailable list MUST be `null` and MUST appear in the session gap list.
+22. A delegated session MUST declare its parent run and MUST preserve the delegation lineage to the top-level workload run.
+23. A `tool-call` record MAY declare billable usage as a quantity, unit, provider-reported cost, or derived estimate.
+24. A `tool-call` record that does not declare billable usage MUST be treated as unknown cost. It MUST NOT be treated as free.
+25. A provider-reported tool cost and a derived tool estimate MUST follow the separation and price-book rules in statements 14 through 17.
+26. An aggregate MUST count each model exchange and tool call once within its run and attempt. It MUST count retries and delegated runs as distinct attempts.
+27. An aggregate with `partial` or `unavailable` usage MUST preserve the unknown amount. It MUST NOT render the unknown amount as zero currency.

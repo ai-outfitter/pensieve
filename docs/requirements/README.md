@@ -27,6 +27,10 @@ implementations and deployed sinks; `CICD-001` and `RTR-001` do not yet. Only
 some statements are pinned by tests, so a statement's presence here is not
 evidence that it holds.
 
+The usage-accounting fields in `SRV-001.13` and `CLC-001.9` are specification
+only as of 2026-08-16. No collector, server route, persisted schema, or test
+proves those fields yet.
+
 ## Statement format
 
 Each document contains numbered sections `<PREFIX>-NNN.M`. Each section
