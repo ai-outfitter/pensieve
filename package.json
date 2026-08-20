@@ -1,0 +1,21 @@
+{
+	"name": "@ai-outfitter/pensieve",
+	"private": true,
+	"description": "Pensieve Pi collector, installable as a Pi package (`git:github.com/ai-outfitter/pensieve@<sha>`). The extension entry is the in-process Pi collector; it captures session, model-exchange, tool-call, and commit-evidence records and forwards them to the sink named by PENSIEVE_SINK.",
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/ai-outfitter/pensieve.git"
+	},
+	"keywords": [
+		"pi-package",
+		"ai-outfitter",
+		"pensieve"
+	],
+	"pi": {
+		"extensions": [
+			"./code/collectors/pi/src/extension.ts"
+		]
+	}
+}

@@ -14,13 +14,16 @@
  * and knows collection here was advisory. Reporting it as managed is
  * forbidden. CLC-001.2.4, CLC-001.2.7, CLC-001.8.3.
  */
+// Relative rather than the @pensieve/collector-core workspace alias: this file
+// is the repository's Pi-package entry, loaded from a bare `pi install` git
+// checkout where no workspace install has run and the alias cannot resolve.
 import {
 	buildContext,
 	clientOptions,
 	CommitWatcher,
 	MemorySegmentStore,
 	PensieveClient,
-} from "@pensieve/collector-core";
+} from "../../core/src/index.ts";
 
 /** The subset of Pi's ExtensionAPI this collector uses. */
 interface ExtensionAPI {
