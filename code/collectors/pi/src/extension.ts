@@ -49,7 +49,22 @@ export default function pensieveCollector(pi: ExtensionAPI): void {
 	// file-backed store to the same watcher.
 	const watcher = new CommitWatcher(context, client, new MemorySegmentStore());
 
-	pi.on("session_start", async () => {
+	// Capture must never break the session it observes: a handler that throws
+	// inside Pi's event loop can take the agent down, converting a capture gap
+	// into an outage. A failure is reported to stderr; the spooled record (when
+	// the spool was writable) is delivered by a later drain. CLC-001.6.
+	const on: ExtensionAPI["on"] = (event, handler) => {
+		pi.on(event, async (payload, eventContext) => {
+			try {
+				return await handler(payload, eventContext);
+			} catch (error) {
+				console.error(`pensieve collector: ${event} capture failed:`, error);
+				return undefined;
+			}
+		});
+	};
+
+	on("session_start", async () => {
 		await watcher.start();
 		const record = watcher.base("session");
 		const result = await client.submit({ ...record, argv: process.argv.slice(2) });
@@ -57,14 +72,14 @@ export default function pensieveCollector(pi: ExtensionAPI): void {
 	});
 
 	// The model request payload. No other harness of the three exposes this.
-	pi.on("before_provider_request", async (event) => {
+	on("before_provider_request", async (event) => {
 		const payload = (event as { payload?: unknown }).payload;
 		const record = watcher.base("model-exchange");
 		const result = await client.submit({ ...record, direction: "request", payload });
 		watcher.note("model-exchange", result.digest);
 	});
 
-	pi.on("after_provider_response", async (event) => {
+	on("after_provider_response", async (event) => {
 		const response = event as { status?: number; headers?: Record<string, string> };
 		// Status and headers only; the body is reconstructed from message events
 		// rather than handed over. Recorded as what it is, not as a full exchange.
@@ -77,7 +92,7 @@ export default function pensieveCollector(pi: ExtensionAPI): void {
 		});
 	});
 
-	pi.on("tool_result", async (event) => {
+	on("tool_result", async (event) => {
 		const result = event as { toolName?: string; input?: unknown; content?: unknown; isError?: boolean };
 		const record = watcher.base("tool-call");
 		const stored = await client.submit({
@@ -93,7 +108,7 @@ export default function pensieveCollector(pi: ExtensionAPI): void {
 		await watcher.check();
 	});
 
-	pi.on("session_shutdown", async () => {
+	on("session_shutdown", async () => {
 		await watcher.check();
 		await watcher.finish();
 		// Deferred delivery for anything the sink refused while offline.
