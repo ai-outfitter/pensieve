@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.0](https://github.com/ai-outfitter/pensieve/compare/v0.5.0...v0.6.0) (2026-08-20)
+
+
+### Features
+
+* install the Pi collector as a Pi package ([b0a17db](https://github.com/ai-outfitter/pensieve/commit/b0a17dbb96c37c07398b7baf7b0afe33405efbc1))
+* install the Pi collector as a Pi package ([fb477c4](https://github.com/ai-outfitter/pensieve/commit/fb477c404feb60aa3024c9dc5efb0db5db9d26e5))
+* upload oversized payloads through a presigned PUT ([57cd873](https://github.com/ai-outfitter/pensieve/commit/57cd873c3fef03ccfa049d8c0e85e79bd9ddc488))
+* upload oversized payloads through a presigned PUT ([0105989](https://github.com/ai-outfitter/pensieve/commit/01059895209afe89b495d6ecc2579d33ca8b36a8))
+
+
+### Bug Fixes
+
+* a capture failure must not break the observed session ([08b0751](https://github.com/ai-outfitter/pensieve/commit/08b075169d850c5cb39845f8f3ff51c3a2bcbf47))
+* act on the presign review ([6eb782b](https://github.com/ai-outfitter/pensieve/commit/6eb782b8a9a340c808c6039d126d2f4eecc506bb))
+
 ## [0.5.0](https://github.com/ai-outfitter/pensieve/compare/v0.4.0...v0.5.0) (2026-08-16)
 
 
