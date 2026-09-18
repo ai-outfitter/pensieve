@@ -199,7 +199,7 @@ describe("Pi collector runtime", () => {
 			process.env.PENSIEVE_SPOOL = spool;
 			process.env.PENSIEVE_RUN = "run-acceptance-failure";
 			process.env.PENSIEVE_FAIL_CLOSED = "1";
-			globalThis.fetch = (async () => new Response("offline", { status: 503 })) as typeof fetch;
+			globalThis.fetch = (async () => new Response("offline", { status: 503 })) as unknown as typeof fetch;
 
 			const loaded = await import(`./extension.ts?fail-closed=${crypto.randomUUID()}`);
 			loaded.default({
@@ -214,7 +214,9 @@ describe("Pi collector runtime", () => {
 			expect(process.exitCode).toBe(1);
 		} finally {
 			globalThis.fetch = originalFetch;
-			process.exitCode = originalExitCode;
+			// Bun 1.4 retains the failing process status after assigning undefined;
+			// restore an explicit success status when the test began unset.
+			process.exitCode = originalExitCode ?? 0;
 			for (const key of Object.keys(process.env)) {
 				if (!(key in originalEnv)) delete process.env[key];
 			}
