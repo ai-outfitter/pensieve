@@ -138,6 +138,12 @@ describe("CommitWatcher", () => {
 				uncommitted: true,
 				segment: ["e".repeat(64)],
 				captured: ["tool-call"],
+				capture: {
+					profile: "test",
+					required: ["tool-call"],
+					captured: ["tool-call"],
+					gaps: [],
+				},
 			});
 			expect(f.store.captured).toEqual([]);
 			expect(f.store.digests).toEqual([]);

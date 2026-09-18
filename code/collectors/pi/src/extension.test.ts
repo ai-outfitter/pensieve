@@ -154,7 +154,15 @@ describe("Pi collector runtime", () => {
 			]));
 
 			const terminal = records.find((record) => record.kind === "session" && record.terminal === true);
-			expect(terminal).toMatchObject({ captured: expect.arrayContaining(["session", "transcript", "model-exchange", "tool-call"]) });
+			expect(terminal).toMatchObject({
+				captured: expect.arrayContaining(["session", "transcript", "model-exchange", "tool-call"]),
+				capture: {
+					profile: "resident-complete-trace",
+					required: ["session", "transcript", "model-exchange", "tool-call"],
+					captured: expect.arrayContaining(["session", "transcript", "model-exchange", "tool-call"]),
+					gaps: [],
+				},
+			});
 		} finally {
 			globalThis.fetch = originalFetch;
 			for (const key of Object.keys(process.env)) {
