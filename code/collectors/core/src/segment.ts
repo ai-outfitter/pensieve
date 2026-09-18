@@ -69,6 +69,7 @@ export function baseRecord(context: CollectorContext, kind: RecordKind): Evidenc
 		install_scope: context.install_scope,
 		harness: context.harness,
 		harness_version: context.harness_version,
+		collector_revision: context.collector_revision,
 		// The event surface actually used, so coverage is computed rather than
 		// asserted from documentation. CLC-001.7.4.
 		event_surface: context.event_surface,

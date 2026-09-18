@@ -33,6 +33,7 @@ function record(marker: string): EvidenceRecord {
 		created_at: new Date().toISOString(),
 		install_scope: "managed",
 		harness: "test",
+		collector_revision: "a".repeat(40),
 		marker,
 	};
 }

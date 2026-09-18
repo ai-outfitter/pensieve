@@ -52,6 +52,7 @@ function context(cwd: string): CollectorContext {
 		install_scope: "managed",
 		harness: "synthetic",
 		harness_version: "test",
+		collector_revision: "a".repeat(40),
 		event_surface: "test",
 		profile: { name: "test", required: ["tool-call"], unsupported: [] },
 		cwd,

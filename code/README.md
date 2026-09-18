@@ -111,7 +111,10 @@ The enterprise resident contract uses the exact profile name
 `resident-complete-trace-v1`, `PENSIEVE_INSTALL_SCOPE=managed`, and
 `PENSIEVE_REQUIRED_CLASSES=session,transcript,model-exchange,tool-call`. A
 different profile name, a weaker install scope, or any missing class is not
-compatible evidence for the paid auditability entitlement.
+compatible evidence for the paid auditability entitlement. The operator also
+sets `PENSIEVE_COLLECTOR_REVISION` to the immutable 40-character source commit;
+the collector binds that revision into every record rather than asking the
+fulfillment callback to trust an uncorrelated deployment claim.
 
 Every collector observes git to find commits rather than trusting the agent to announce them, and records the invocation arguments it can see — including the ones that would disable it. A session in which the collector never ran produces no record at all, and the sink treats absence as unattested, never as clean.
 

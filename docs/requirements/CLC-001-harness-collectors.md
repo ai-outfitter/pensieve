@@ -35,6 +35,7 @@ the failure this component exists to prevent.
 5. A collector MUST record the harness name, the harness version, and the observable invocation arguments in its session record.
 6. Where a harness supports a managed-only mode that ignores user and project hook configuration, the organization SHOULD enable it, and the collector MUST record whether it was in force.
 7. Where a harness offers no managed scope, the organization MUST treat the launcher as the only install point, and the deployment MUST NOT present workstation collection for that harness as authoritative.
+8. A managed collector MUST bind its immutable collector revision into every record it emits so a verifier can prove the captured bytes came from the revision the deployment reports.
 
 ### CLC-001.3: Commit Segmentation
 

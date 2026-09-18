@@ -69,6 +69,7 @@ describe("Pi collector runtime", () => {
 			process.env.PENSIEVE_INSTALL_SCOPE = "launcher";
 			process.env.PENSIEVE_PROFILE = "resident-complete-trace-v1";
 			process.env.PENSIEVE_REQUIRED_CLASSES = "session,transcript,model-exchange,tool-call";
+			process.env.PENSIEVE_COLLECTOR_REVISION = "c".repeat(40);
 			globalThis.fetch = (async (_input, init) => {
 				records.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
 				return Response.json({ digest: records.length.toString(16).padStart(64, "0") }, { status: 201 });
@@ -163,6 +164,7 @@ describe("Pi collector runtime", () => {
 					is_error: false,
 				}),
 			]));
+			expect(records.every((record) => record.collector_revision === "c".repeat(40))).toBe(true);
 
 			const terminal = records.find((record) => record.kind === "session" && record.terminal === true);
 			expect(terminal).toMatchObject({

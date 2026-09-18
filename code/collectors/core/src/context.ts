@@ -48,6 +48,7 @@ export function buildContext(options: ContextOptions, env = process.env): Collec
 		install_scope: installScope(env),
 		harness: options.harness,
 		harness_version: options.harnessVersion,
+		collector_revision: env.PENSIEVE_COLLECTOR_REVISION ?? "unknown",
 		event_surface: options.eventSurface,
 		profile: profileFor(options.unsupported, env),
 		cwd: options.cwd,
