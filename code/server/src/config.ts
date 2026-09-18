@@ -6,15 +6,15 @@ export interface Config {
 	retentionFloorDays: number;
 	/** Dev auth accepts `Authorization: Bearer dev:<identity>`. Never enable in production. */
 	devAuth: boolean;
-	oidc?: {
+	oidc?: Array<{
 		issuer: string;
 		audience: string;
 		/** Full-match patterns over the verified JWT subject. */
-		writeSubjectPattern: string;
+		writeSubjectPattern?: string;
 		readSubjectPattern?: string;
 		/** Optional for issuers that do not publish OpenID discovery. */
 		jwksUri?: string;
-	};
+	}>;
 	store:
 		| {
 				kind: "s3";
@@ -111,21 +111,76 @@ function loadStore(env: Record<string, string | undefined>): Config["store"] {
 }
 
 export function loadConfig(env: Record<string, string | undefined> = Bun.env): Config {
-	const oidcValues = [
-		env.PENSIEVE_OIDC_ISSUER,
-		env.PENSIEVE_OIDC_AUDIENCE,
-		env.PENSIEVE_OIDC_WRITE_SUBJECT_PATTERN,
-	];
-	const oidcPresent = oidcValues.filter(Boolean).length;
-	if (oidcPresent !== 0 && oidcPresent !== oidcValues.length) {
-		throw new Error(
-			"OIDC authentication is incomplete; set PENSIEVE_OIDC_ISSUER, PENSIEVE_OIDC_AUDIENCE, and PENSIEVE_OIDC_WRITE_SUBJECT_PATTERN together",
-		);
+	let oidc: Config["oidc"];
+	if (env.PENSIEVE_OIDC_TRUSTS) {
+		const legacyNames = [
+			"PENSIEVE_OIDC_ISSUER",
+			"PENSIEVE_OIDC_AUDIENCE",
+			"PENSIEVE_OIDC_WRITE_SUBJECT_PATTERN",
+			"PENSIEVE_OIDC_READ_SUBJECT_PATTERN",
+			"PENSIEVE_OIDC_JWKS_URI",
+		] as const;
+		if (legacyNames.some((name) => env[name])) {
+			throw new Error("PENSIEVE_OIDC_TRUSTS cannot be combined with legacy PENSIEVE_OIDC_* trust variables");
+		}
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(env.PENSIEVE_OIDC_TRUSTS);
+		} catch {
+			throw new Error("PENSIEVE_OIDC_TRUSTS must be valid JSON");
+		}
+		if (!Array.isArray(parsed) || parsed.length === 0) {
+			throw new Error("PENSIEVE_OIDC_TRUSTS must be a non-empty array");
+		}
+		oidc = parsed.map((value, index) => {
+			if (!value || typeof value !== "object" || Array.isArray(value)) {
+				throw new Error(`PENSIEVE_OIDC_TRUSTS[${index}] must be an object`);
+			}
+			const trust = value as Record<string, unknown>;
+			for (const field of ["issuer", "audience"] as const) {
+				if (typeof trust[field] !== "string" || !trust[field]) {
+					throw new Error(`PENSIEVE_OIDC_TRUSTS[${index}].${field} is required`);
+				}
+			}
+			for (const field of ["writeSubjectPattern", "readSubjectPattern", "jwksUri"] as const) {
+				if (trust[field] !== undefined && (typeof trust[field] !== "string" || !trust[field])) {
+					throw new Error(`PENSIEVE_OIDC_TRUSTS[${index}].${field} is invalid`);
+				}
+			}
+			if (!trust.writeSubjectPattern && !trust.readSubjectPattern) {
+				throw new Error(`PENSIEVE_OIDC_TRUSTS[${index}] authorizes neither reads nor writes`);
+			}
+			return trust as NonNullable<Config["oidc"]>[number];
+		});
+	} else {
+		const oidcValues = [
+			env.PENSIEVE_OIDC_ISSUER,
+			env.PENSIEVE_OIDC_AUDIENCE,
+			env.PENSIEVE_OIDC_WRITE_SUBJECT_PATTERN,
+		];
+		const oidcPresent = oidcValues.filter(Boolean).length;
+		if (oidcPresent !== 0 && oidcPresent !== oidcValues.length) {
+			throw new Error(
+				"OIDC authentication is incomplete; set PENSIEVE_OIDC_ISSUER, PENSIEVE_OIDC_AUDIENCE, and PENSIEVE_OIDC_WRITE_SUBJECT_PATTERN together",
+			);
+		}
+		oidc = oidcPresent === oidcValues.length
+			? [{
+					issuer: env.PENSIEVE_OIDC_ISSUER!,
+					audience: env.PENSIEVE_OIDC_AUDIENCE!,
+					writeSubjectPattern: env.PENSIEVE_OIDC_WRITE_SUBJECT_PATTERN!,
+					readSubjectPattern: env.PENSIEVE_OIDC_READ_SUBJECT_PATTERN,
+					jwksUri: env.PENSIEVE_OIDC_JWKS_URI,
+				}]
+			: undefined;
 	}
-	for (const [name, pattern] of [
-		["PENSIEVE_OIDC_WRITE_SUBJECT_PATTERN", env.PENSIEVE_OIDC_WRITE_SUBJECT_PATTERN],
-		["PENSIEVE_OIDC_READ_SUBJECT_PATTERN", env.PENSIEVE_OIDC_READ_SUBJECT_PATTERN],
-	] as const) {
+	if (oidc && new Set(oidc.map((trust) => `${trust.issuer}\0${trust.audience}`)).size !== oidc.length) {
+		throw new Error("PENSIEVE_OIDC_TRUSTS contains a duplicate issuer and audience");
+	}
+	for (const [name, pattern] of (oidc ?? []).flatMap((trust, index) => [
+		[`PENSIEVE_OIDC_TRUSTS[${index}].writeSubjectPattern`, trust.writeSubjectPattern],
+		[`PENSIEVE_OIDC_TRUSTS[${index}].readSubjectPattern`, trust.readSubjectPattern],
+	] as const)) {
 		if (!pattern) continue;
 		if (!pattern.startsWith("^") || !pattern.endsWith("$")) throw new Error(`${name} must be anchored with ^ and $`);
 		try { new RegExp(pattern); }
@@ -138,15 +193,7 @@ export function loadConfig(env: Record<string, string | undefined> = Bun.env): C
 		indexPath: env.PENSIEVE_INDEX ?? ":memory:",
 		retentionFloorDays: int(env.PENSIEVE_RETENTION_FLOOR_DAYS, 7),
 		devAuth: env.PENSIEVE_DEV_AUTH === "1",
-		oidc: oidcPresent === oidcValues.length
-			? {
-					issuer: env.PENSIEVE_OIDC_ISSUER!,
-					audience: env.PENSIEVE_OIDC_AUDIENCE!,
-					writeSubjectPattern: env.PENSIEVE_OIDC_WRITE_SUBJECT_PATTERN!,
-					readSubjectPattern: env.PENSIEVE_OIDC_READ_SUBJECT_PATTERN,
-					jwksUri: env.PENSIEVE_OIDC_JWKS_URI,
-				}
-			: undefined,
+		oidc,
 		store: loadStore(env),
 	};
 }

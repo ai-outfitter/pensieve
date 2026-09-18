@@ -51,6 +51,7 @@ export async function createApp(config: Config): Promise<App> {
 		}
 
 		const principal = await authenticate(request, config.devAuth, oidc);
+		if (method === "GET" && !principal.canRead) return problem(403, "principal may not read evidence");
 
 		if (path === "/v0/records" && method === "POST") {
 			const stored = await sink.ingest(await request.json(), principal);
@@ -189,6 +190,7 @@ export async function createApp(config: Config): Promise<App> {
 		}
 
 		if (path === "/v0/coverage" && method === "POST") {
+			if (!principal.canRead) return problem(403, "principal may not read evidence");
 			const body = (await request.json()) as { commits?: unknown };
 			if (!Array.isArray(body.commits)) return problem(400, "body must carry a commits array");
 			return Response.json(await sink.rangeCoverage(body.commits as string[]));

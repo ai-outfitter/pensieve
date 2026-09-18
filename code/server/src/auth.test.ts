@@ -62,6 +62,7 @@ describe("production OIDC authentication", () => {
 		await expect(authenticator().authenticate(token)).resolves.toEqual({
 			identity: "system:serviceaccount:agent-ncrmro-luce:agent-runtime",
 			canWrite: true,
+			canRead: false,
 		});
 	});
 
@@ -70,6 +71,41 @@ describe("production OIDC authentication", () => {
 		await expect(authenticator("^system:serviceaccount:pensieve:auditor$").authenticate(token)).resolves.toEqual({
 			identity: "system:serviceaccount:pensieve:auditor",
 			canWrite: false,
+			canRead: true,
+		});
+	});
+
+	test("accepts a separately pinned GitHub auditor issuer without granting writes", async () => {
+		const githubIssuer = "https://token.actions.githubusercontent.com";
+		const githubAudience = "ai-outfitter-pensieve";
+		const fetcher = (async (input) => {
+			const url = String(input);
+			if (url.endsWith("/.well-known/openid-configuration")) {
+				const configuredIssuer = url.startsWith(githubIssuer) ? githubIssuer : issuer;
+				return Response.json({ issuer: configuredIssuer, jwks_uri: `${configuredIssuer}/openid/v1/jwks` });
+			}
+			if (url.endsWith("/openid/v1/jwks")) return Response.json({ keys: [publicJwk] });
+			return new Response("not found", { status: 404 });
+		}) as typeof fetch;
+		const multiple = new OidcAuthenticator([
+			{
+				issuer, audience,
+				writeSubjectPattern: "^system:serviceaccount:agent-[a-z0-9-]+:agent-runtime$",
+			},
+			{
+				issuer: githubIssuer, audience: githubAudience,
+				readSubjectPattern: "^repo:Unsupervisedcom/\\.agents:ref:refs/heads/main$",
+			},
+		], fetcher);
+		const token = await jwt({
+			iss: githubIssuer,
+			aud: githubAudience,
+			sub: "repo:Unsupervisedcom/.agents:ref:refs/heads/main",
+		});
+		await expect(multiple.authenticate(token)).resolves.toEqual({
+			identity: "repo:Unsupervisedcom/.agents:ref:refs/heads/main",
+			canWrite: false,
+			canRead: true,
 		});
 	});
 

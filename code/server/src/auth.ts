@@ -29,12 +29,12 @@ function verifyAlgorithm(alg: string) {
 	return alg === "ES256" ? { name: "ECDSA", hash: "SHA-256" } : { name: "RSASSA-PKCS1-v1_5" };
 }
 
-/** Cached OIDC verification for production workload and auditor identities. */
-export class OidcAuthenticator {
+/** Cached verification for one pinned OIDC issuer and audience. */
+class OidcProvider {
 	private keys: { expiresAt: number; values: Jwk[] } | undefined;
 
 	constructor(
-		private readonly config: NonNullable<Config["oidc"]>,
+		readonly config: NonNullable<Config["oidc"]>[number],
 		private readonly fetcher: typeof fetch = fetch,
 		private readonly now: () => number = Date.now,
 	) {}
@@ -96,10 +96,39 @@ export class OidcAuthenticator {
 			throw new AuthError("bearer token is expired or not active");
 		}
 		if (typeof claims.sub !== "string" || claims.sub.length === 0) throw new AuthError("bearer token has no subject");
-		const canWrite = new RegExp(this.config.writeSubjectPattern).test(claims.sub);
+		const canWrite = this.config.writeSubjectPattern
+			? new RegExp(this.config.writeSubjectPattern).test(claims.sub)
+			: false;
 		const canRead = this.config.readSubjectPattern ? new RegExp(this.config.readSubjectPattern).test(claims.sub) : false;
 		if (!canWrite && !canRead) throw new AuthError("bearer token subject is not authorized", 403);
-		return { identity: claims.sub, canWrite };
+		return { identity: claims.sub, canWrite, canRead };
+	}
+}
+
+/** Cached OIDC verification across separately pinned writer and auditor issuers. */
+export class OidcAuthenticator {
+	private readonly providers: OidcProvider[];
+
+	constructor(
+		config: NonNullable<Config["oidc"]> | NonNullable<Config["oidc"]>[number],
+		fetcher: typeof fetch = fetch,
+		now: () => number = Date.now,
+	) {
+		const trusts = Array.isArray(config) ? config : [config];
+		this.providers = trusts.map((trust) => new OidcProvider(trust, fetcher, now));
+	}
+
+	async authenticate(token: string): Promise<Principal> {
+		const parts = token.split(".");
+		if (parts.length !== 3 || parts.some((part) => part.length === 0)) {
+			throw new AuthError("bearer token is not a valid JWT");
+		}
+		const claims = decodePart<JwtClaims>(parts[1] as string);
+		const provider = this.providers.find((candidate) =>
+			claims.iss === candidate.config.issuer
+			&& audienceIncludes(claims.aud, candidate.config.audience));
+		if (!provider) throw new AuthError("bearer token issuer or audience is invalid");
+		return provider.authenticate(token);
 	}
 }
 
@@ -110,9 +139,8 @@ export class OidcAuthenticator {
  *   `Bearer dev:<identity>`   — write, local stack only, requires PENSIEVE_DEV_AUTH=1
  *   `Bearer read:<identity>`  — read-only, what a CI gate receives (CICD-001.6.3)
  *
- * Production exchanges a forge or cluster OIDC token for a short-lived
- * credential (SRV-001.2.2). That exchange is not implemented yet, and an
- * unimplemented verifier must reject rather than wave traffic through.
+ * Production verifies short-lived forge and cluster OIDC tokens directly
+ * against separately pinned trust entries (SRV-001.2.2, RTR-001.5.1).
  */
 export async function authenticate(
 	request: Request,
@@ -127,13 +155,13 @@ export async function authenticate(
 		if (!devAuth) throw new AuthError("dev tokens are disabled on this deployment", 403);
 		const identity = token.slice("dev:".length);
 		if (!identity) throw new AuthError("dev token carries no identity");
-		return { identity, canWrite: true };
+		return { identity, canWrite: true, canRead: false };
 	}
 	if (token.startsWith("read:")) {
 		if (!devAuth) throw new AuthError("dev tokens are disabled on this deployment", 403);
 		const identity = token.slice("read:".length);
 		if (!identity) throw new AuthError("read token carries no identity");
-		return { identity, canWrite: false };
+		return { identity, canWrite: false, canRead: true };
 	}
 	if (oidc) return oidc.authenticate(token);
 	throw new AuthError("OIDC authentication is not configured on this deployment", 501);

@@ -111,6 +111,23 @@ describe("ingest", () => {
 		expect(response.status).toBe(403);
 	});
 
+	// THIS TEST VALIDATES A HARD REQUIREMENT (RTR-001.5.1)
+	test("a resident writer may not read evidence", async () => {
+		const { handle } = await app();
+		const created = await handle(post("/v0/records", commitEvidence()));
+		const { digest } = await json<Created>(created);
+		const response = await handle(new Request(`http://sink/v0/records/${digest}`, {
+			headers: { authorization: "Bearer dev:agent:engineer" },
+		}));
+		expect(response.status).toBe(403);
+	});
+
+	test("a resident writer may not query coverage through POST", async () => {
+		const { handle } = await app();
+		const response = await handle(post("/v0/coverage", { commits: ["a".repeat(40)] }));
+		expect(response.status).toBe(403);
+	});
+
 	// THIS TEST VALIDATES A HARD REQUIREMENT (SRV-001.4.5)
 	test("an unmet required capture class seals the record failed-evidence", async () => {
 		const { handle } = await app();

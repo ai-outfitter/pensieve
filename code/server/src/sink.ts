@@ -54,6 +54,8 @@ export interface Principal {
 	identity: string;
 	/** Read-only principals can never write evidence. CICD-001.6.4. */
 	canWrite: boolean;
+	/** Write-only resident identities cannot retrieve customer evidence. RTR-001.5.1. */
+	canRead: boolean;
 }
 
 export class AuthError extends Error {

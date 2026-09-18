@@ -74,10 +74,33 @@ request payloads and response metadata, and paired tool-call intent/result
 records. It does not claim provider-private chain of thought that Pi never
 receives.
 
-Production sinks can verify OIDC bearer tokens directly. Configuration pins the
-issuer and audience and separately allowlists write and read subjects; the
-verified JWT subject is the evidence principal. `dev:` and `read:` labels are
-development-only and are both rejected unless `PENSIEVE_DEV_AUTH=1`.
+Production sinks verify short-lived OIDC bearer tokens directly. Configure one
+or more pinned trust entries with `PENSIEVE_OIDC_TRUSTS`; each entry names an
+issuer, audience, and an anchored write or read subject pattern. For example, a
+resident can write with a projected EKS service-account token while a GitHub
+Actions fulfillment job can read with a separate, repository-and-ref-bound
+identity:
+
+```json
+[
+  {
+    "issuer": "https://oidc.eks.example/id/cluster",
+    "audience": "pensieve",
+    "writeSubjectPattern": "^system:serviceaccount:agent-[a-z0-9-]+:agent-runtime$"
+  },
+  {
+    "issuer": "https://token.actions.githubusercontent.com",
+    "audience": "ai-outfitter-pensieve",
+    "readSubjectPattern": "^repo:Unsupervisedcom/\\.agents:ref:refs/heads/main$"
+  }
+]
+```
+
+The verified JWT subject is the evidence principal. A write-only resident
+cannot retrieve evidence, and a read-only auditor cannot ingest it. The legacy
+single-issuer `PENSIEVE_OIDC_*` variables remain available for one trust entry,
+but cannot be combined with `PENSIEVE_OIDC_TRUSTS`. `dev:` and `read:` labels
+are development-only and are both rejected unless `PENSIEVE_DEV_AUTH=1`.
 
 Residents use `PENSIEVE_TOKEN_FILE` for a projected Kubernetes service-account
 token. The collector rereads that file for every upload so kubelet rotation does
