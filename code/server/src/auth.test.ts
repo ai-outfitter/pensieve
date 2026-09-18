@@ -115,6 +115,22 @@ describe("production OIDC authentication", () => {
 		await expect(authenticator().authenticate(await jwt({ sub: "system:serviceaccount:default:default" }))).rejects.toThrow("not authorized");
 	});
 
+	test("rejects a token whose audience array matches multiple trust entries", async () => {
+		const fetcher = (async (input) => {
+			if (String(input).endsWith("/.well-known/openid-configuration")) {
+				return Response.json({ issuer, jwks_uri: `${issuer}/openid/v1/jwks` });
+			}
+			if (String(input) === `${issuer}/openid/v1/jwks`) return Response.json({ keys: [publicJwk] });
+			return new Response("not found", { status: 404 });
+		}) as typeof fetch;
+		const multiple = new OidcAuthenticator([
+			{ issuer, audience, writeSubjectPattern: "^system:serviceaccount:agent-[a-z0-9-]+:agent-runtime$" },
+			{ issuer, audience: "pensieve-auditor", readSubjectPattern: "^system:serviceaccount:agent-[a-z0-9-]+:agent-runtime$" },
+		], fetcher);
+		await expect(multiple.authenticate(await jwt({ aud: [audience, "pensieve-auditor"] })))
+			.rejects.toThrow("matches multiple OIDC trust entries");
+	});
+
 	test("does not accept read labels as credentials when dev auth is disabled", async () => {
 		// THIS TEST VALIDATES A HARD REQUIREMENT (SRV-001.2.10).
 		// YOU MUST NOT MODIFY THIS TEST UNLESS THE REQUIREMENT CHANGES.

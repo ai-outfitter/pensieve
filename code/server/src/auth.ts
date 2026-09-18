@@ -124,11 +124,15 @@ export class OidcAuthenticator {
 			throw new AuthError("bearer token is not a valid JWT");
 		}
 		const claims = decodePart<JwtClaims>(parts[1] as string);
-		const provider = this.providers.find((candidate) =>
+		const providers = this.providers.filter((candidate) =>
 			claims.iss === candidate.config.issuer
 			&& audienceIncludes(claims.aud, candidate.config.audience));
-		if (!provider) throw new AuthError("bearer token issuer or audience is invalid");
-		return provider.authenticate(token);
+		if (providers.length !== 1) {
+			throw new AuthError(providers.length === 0
+				? "bearer token issuer or audience is invalid"
+				: "bearer token matches multiple OIDC trust entries");
+		}
+		return providers[0]!.authenticate(token);
 	}
 }
 
