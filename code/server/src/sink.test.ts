@@ -26,6 +26,7 @@ const BASE = {
 	environment: "workstation",
 	policy_digest: "sha256:policy",
 	created_at: "2026-08-07T00:00:00.000Z",
+	collector_revision: "e".repeat(40),
 };
 
 function commitEvidence(overrides: Record<string, unknown> = {}) {
@@ -126,6 +127,13 @@ describe("ingest", () => {
 		const { handle } = await app();
 		const response = await handle(post("/v0/coverage", { commits: ["a".repeat(40)] }));
 		expect(response.status).toBe(403);
+	});
+
+	test("a managed record without an immutable collector revision is rejected", async () => {
+		const { handle } = await app();
+		const response = await handle(post("/v0/records", commitEvidence({ collector_revision: undefined })));
+		expect(response.status).toBe(400);
+		expect((await json<{ error: string }>(response)).error).toContain("collector_revision");
 	});
 
 	// THIS TEST VALIDATES A HARD REQUIREMENT (SRV-001.4.5)

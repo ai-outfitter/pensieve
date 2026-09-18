@@ -44,6 +44,7 @@ Terms used throughout:
 10. Development bearer forms MUST be rejected for both read and write access whenever development authentication is disabled.
 11. Signing-key rotation MUST be discovered without a sink restart. An unknown key identifier MUST cause one fresh key-set lookup before the request is rejected.
 12. The sink MUST support separately pinned issuer, audience, and subject-policy trust entries for resident writers and fulfillment auditors. Trusting one issuer MUST NOT grant a token from that issuer read or write authority absent its matching subject policy.
+13. The sink MUST reject a record claiming managed collector scope unless it carries a valid immutable collector revision.
 
 ### SRV-001.3: Record Model
 
