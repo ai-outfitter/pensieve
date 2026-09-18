@@ -67,7 +67,7 @@ describe("Pi collector runtime", () => {
 			process.env.PENSIEVE_RUN = "run-resident-1";
 			process.env.PENSIEVE_IDENTITY = "agent:resident-1";
 			process.env.PENSIEVE_INSTALL_SCOPE = "launcher";
-			process.env.PENSIEVE_PROFILE = "resident-complete-trace";
+			process.env.PENSIEVE_PROFILE = "resident-complete-trace-v1";
 			process.env.PENSIEVE_REQUIRED_CLASSES = "session,transcript,model-exchange,tool-call";
 			globalThis.fetch = (async (_input, init) => {
 				records.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
@@ -168,7 +168,7 @@ describe("Pi collector runtime", () => {
 			expect(terminal).toMatchObject({
 				captured: expect.arrayContaining(["session", "transcript", "model-exchange", "tool-call"]),
 				capture: {
-					profile: "resident-complete-trace",
+					profile: "resident-complete-trace-v1",
 					required: ["session", "transcript", "model-exchange", "tool-call"],
 					captured: expect.arrayContaining(["session", "transcript", "model-exchange", "tool-call"]),
 					gaps: [],
