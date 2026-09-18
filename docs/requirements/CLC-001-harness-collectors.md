@@ -90,6 +90,9 @@ the failure this component exists to prevent.
 2. A collector for a harness whose hooks do not expose model requests and responses MUST declare the `model-exchange` class as a gap. A conversation transcript MUST NOT be recorded as satisfying that class.
 3. A collector MUST prefer an in-process event surface over a reconstructed one where the harness provides both.
 4. A collector MUST record the exact event surface it used, so that a coverage report is computed from what ran rather than asserted from documentation.
+5. The Pi collector MUST record the fully assembled prompt and system prompt exposed before an agent turn as transcript evidence.
+6. The Pi collector MUST record each completed message exactly as the harness exposes it, including exposed reasoning or thinking content. It MUST NOT claim to capture provider-private reasoning that the harness does not expose.
+7. The Pi collector MUST record a tool-call intent before execution and its result as a separate record after execution. Both records MUST carry the harness tool-call identifier so a missing result remains distinguishable from a tool that never ran.
 
 ### CLC-001.8: Bypass
 

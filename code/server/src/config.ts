@@ -6,6 +6,15 @@ export interface Config {
 	retentionFloorDays: number;
 	/** Dev auth accepts `Authorization: Bearer dev:<identity>`. Never enable in production. */
 	devAuth: boolean;
+	oidc?: {
+		issuer: string;
+		audience: string;
+		/** Full-match patterns over the verified JWT subject. */
+		writeSubjectPattern: string;
+		readSubjectPattern?: string;
+		/** Optional for issuers that do not publish OpenID discovery. */
+		jwksUri?: string;
+	};
 	store:
 		| {
 				kind: "s3";
@@ -102,6 +111,26 @@ function loadStore(env: Record<string, string | undefined>): Config["store"] {
 }
 
 export function loadConfig(env: Record<string, string | undefined> = Bun.env): Config {
+	const oidcValues = [
+		env.PENSIEVE_OIDC_ISSUER,
+		env.PENSIEVE_OIDC_AUDIENCE,
+		env.PENSIEVE_OIDC_WRITE_SUBJECT_PATTERN,
+	];
+	const oidcPresent = oidcValues.filter(Boolean).length;
+	if (oidcPresent !== 0 && oidcPresent !== oidcValues.length) {
+		throw new Error(
+			"OIDC authentication is incomplete; set PENSIEVE_OIDC_ISSUER, PENSIEVE_OIDC_AUDIENCE, and PENSIEVE_OIDC_WRITE_SUBJECT_PATTERN together",
+		);
+	}
+	for (const [name, pattern] of [
+		["PENSIEVE_OIDC_WRITE_SUBJECT_PATTERN", env.PENSIEVE_OIDC_WRITE_SUBJECT_PATTERN],
+		["PENSIEVE_OIDC_READ_SUBJECT_PATTERN", env.PENSIEVE_OIDC_READ_SUBJECT_PATTERN],
+	] as const) {
+		if (!pattern) continue;
+		if (!pattern.startsWith("^") || !pattern.endsWith("$")) throw new Error(`${name} must be anchored with ^ and $`);
+		try { new RegExp(pattern); }
+		catch { throw new Error(`${name} is not a valid regular expression`); }
+	}
 	return {
 		port: int(env.PORT, 4319),
 		sinkId: env.PENSIEVE_SINK_ID ?? "pensieve.local",
@@ -109,6 +138,15 @@ export function loadConfig(env: Record<string, string | undefined> = Bun.env): C
 		indexPath: env.PENSIEVE_INDEX ?? ":memory:",
 		retentionFloorDays: int(env.PENSIEVE_RETENTION_FLOOR_DAYS, 7),
 		devAuth: env.PENSIEVE_DEV_AUTH === "1",
+		oidc: oidcPresent === oidcValues.length
+			? {
+					issuer: env.PENSIEVE_OIDC_ISSUER!,
+					audience: env.PENSIEVE_OIDC_AUDIENCE!,
+					writeSubjectPattern: env.PENSIEVE_OIDC_WRITE_SUBJECT_PATTERN!,
+					readSubjectPattern: env.PENSIEVE_OIDC_READ_SUBJECT_PATTERN,
+					jwksUri: env.PENSIEVE_OIDC_JWKS_URI,
+				}
+			: undefined,
 		store: loadStore(env),
 	};
 }

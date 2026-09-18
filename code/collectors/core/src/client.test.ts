@@ -1,11 +1,12 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PensieveClient } from "./client.ts";
 import type { EvidenceRecord } from "./types.ts";
 
 const received: string[] = [];
+const authorizations: string[] = [];
 let accepting = false;
 
 const server = Bun.serve({
@@ -14,6 +15,7 @@ const server = Bun.serve({
 		if (!accepting) return new Response("sink down", { status: 503 });
 		const record = (await request.json()) as EvidenceRecord;
 		received.push(String(record.marker));
+		authorizations.push(request.headers.get("authorization") ?? "");
 		return Response.json({ digest: "0".repeat(64) }, { status: 201 });
 	},
 });
@@ -54,5 +56,21 @@ describe("delivery", () => {
 		expect(received).toEqual(["a", "b", "c"]);
 
 		expect((await client.flush()).remaining).toBe(0);
+	});
+
+	// THIS TEST VALIDATES A HARD REQUIREMENT (SRV-001.9, CLC-001.6.2)
+	test("a projected workload token is reread after rotation", async () => {
+		const spool = await mkdtemp(join(tmpdir(), "pensieve-spool-"));
+		const tokenFile = join(spool, "token");
+		const client = new PensieveClient({ sink: server.url.origin, token: "", tokenFile, spool });
+		accepting = true;
+		const before = authorizations.length;
+
+		await writeFile(tokenFile, "token-one\n");
+		expect((await client.submit(record("rotated-1"))).delivered).toBe(true);
+		await writeFile(tokenFile, "token-two\n");
+		expect((await client.submit(record("rotated-2"))).delivered).toBe(true);
+
+		expect(authorizations.slice(before)).toEqual(["Bearer token-one", "Bearer token-two"]);
 	});
 });

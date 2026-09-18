@@ -40,6 +40,9 @@ Terms used throughout:
 6. The sink MUST reject evidence submitted by a CI job on behalf of a session that ran elsewhere.
 7. The sink MUST record the authenticated principal, the source address, and the receipt time for every accepted record.
 8. The sink MUST accept out-of-order and late delivery, and MUST NOT reject a record because a related record has not arrived.
+9. A bearer workload token MUST be verified against the configured issuer's signing key, issuer, audience, activation time, expiry, and an allowlisted subject pattern before its subject becomes the authenticated principal.
+10. Development bearer forms MUST be rejected for both read and write access whenever development authentication is disabled.
+11. Signing-key rotation MUST be discovered without a sink restart. An unknown key identifier MUST cause one fresh key-set lookup before the request is rejected.
 
 ### SRV-001.3: Record Model
 

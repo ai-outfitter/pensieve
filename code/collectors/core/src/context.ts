@@ -58,6 +58,7 @@ export function clientOptions(env = process.env) {
 	return {
 		sink: env.PENSIEVE_SINK ?? "http://localhost:4319",
 		token: env.PENSIEVE_TOKEN ?? "",
+		tokenFile: env.PENSIEVE_TOKEN_FILE,
 		spool: env.PENSIEVE_SPOOL ?? "/var/lib/pensieve/spool",
 		emergencySink: env.PENSIEVE_EMERGENCY_SINK,
 		emergencyToken: env.PENSIEVE_EMERGENCY_TOKEN,

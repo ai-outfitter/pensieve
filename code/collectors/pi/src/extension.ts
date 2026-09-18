@@ -30,6 +30,18 @@ interface ExtensionAPI {
 	on(event: string, handler: (event: unknown, context?: unknown) => unknown): void;
 }
 
+type ToolCallEvent = {
+	toolCallId?: string;
+	toolName?: string;
+	input?: unknown;
+};
+
+type ToolResultEvent = ToolCallEvent & {
+	content?: unknown;
+	details?: unknown;
+	isError?: boolean;
+};
+
 export default function pensieveCollector(pi: ExtensionAPI): void {
 	const context = buildContext(
 		{
@@ -92,14 +104,71 @@ export default function pensieveCollector(pi: ExtensionAPI): void {
 		});
 	});
 
-	on("tool_result", async (event) => {
-		const result = event as { toolName?: string; input?: unknown; content?: unknown; isError?: boolean };
+	// The prompt and resolved system prompt are part of the session log. This is
+	// also where the policy that shaped the request becomes inspectable rather
+	// than an uncheckable claim about which profile was active.
+	on("before_agent_start", async (event) => {
+		const started = event as {
+			prompt?: string;
+			images?: unknown;
+			systemPrompt?: string;
+			systemPromptOptions?: unknown;
+		};
+		const record = watcher.base("transcript");
+		const result = await client.submit({
+			...record,
+			event: "before-agent-start",
+			prompt: started.prompt,
+			images: started.images,
+			system_prompt: started.systemPrompt,
+			system_prompt_options: started.systemPromptOptions,
+		});
+		watcher.note("transcript", result.digest);
+	});
+
+	// Pi emits the complete message after streaming finishes. Recording the
+	// message here captures user, assistant, reasoning/thinking, and tool-result
+	// content exactly as the harness exposes it without duplicating every token
+	// delta from message_update. Provider-private chain of thought is not exposed
+	// by Pi and therefore cannot be captured or claimed.
+	on("message_end", async (event) => {
+		const ended = event as { message?: unknown };
+		const record = watcher.base("transcript");
+		const result = await client.submit({
+			...record,
+			event: "message-end",
+			message: ended.message,
+		});
+		watcher.note("transcript", result.digest);
+	});
+
+	// Preserve the requested call even if the process crashes or the tool never
+	// returns. The result is a second record with the same tool_call_id, so an
+	// auditor can distinguish "requested", "completed", and "missing result".
+	on("tool_call", async (event) => {
+		const call = event as ToolCallEvent;
 		const record = watcher.base("tool-call");
 		const stored = await client.submit({
 			...record,
+			phase: "call",
+			tool_call_id: call.toolCallId,
+			tool_name: call.toolName,
+			tool_input: call.input,
+		});
+		watcher.note("tool-call", stored.digest);
+	});
+
+	on("tool_result", async (event) => {
+		const result = event as ToolResultEvent;
+		const record = watcher.base("tool-call");
+		const stored = await client.submit({
+			...record,
+			phase: "result",
+			tool_call_id: result.toolCallId,
 			tool_name: result.toolName,
 			tool_input: result.input,
 			tool_output: result.content,
+			tool_details: result.details,
 			is_error: result.isError ?? false,
 		});
 		watcher.note("tool-call", stored.digest);

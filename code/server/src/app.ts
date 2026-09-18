@@ -1,4 +1,4 @@
-import { authenticate } from "./auth.ts";
+import { authenticate, OidcAuthenticator } from "./auth.ts";
 import type { Config } from "./config.ts";
 import { RecordIndex } from "./db.ts";
 import { Signer } from "./identity.ts";
@@ -33,6 +33,7 @@ export async function createApp(config: Config): Promise<App> {
 	const signer = await Signer.create({ id: config.sinkId, privateKeyPkcs8Base64: config.signingKey });
 	const index = new RecordIndex(config.indexPath);
 	const sink = new Sink(store, signer, index, config.retentionFloorDays);
+	const oidc = config.oidc ? new OidcAuthenticator(config.oidc) : undefined;
 
 	async function route(request: Request): Promise<Response> {
 		const url = new URL(request.url);
@@ -49,7 +50,7 @@ export async function createApp(config: Config): Promise<App> {
 			return Response.json({ ...sink.identity, conforming: sink.conforming, mechanism: store.kind });
 		}
 
-		const principal = authenticate(request, config.devAuth);
+		const principal = await authenticate(request, config.devAuth, oidc);
 
 		if (path === "/v0/records" && method === "POST") {
 			const stored = await sink.ingest(await request.json(), principal);
