@@ -176,6 +176,11 @@ export async function createApp(config: Config): Promise<App> {
 				const found = await sink.readRecord(record);
 				return found ? Response.json(found) : problem(404, "no such record");
 			}
+			const statement = hexParam(path, "statements", 64);
+			if (statement) {
+				const found = await sink.readStatement(statement);
+				return found ? Response.json(found) : problem(404, "no such statement");
+			}
 			const commit = hexParam(path, "commits", 40);
 			if (commit) return Response.json(await sink.commitCoverage(commit));
 

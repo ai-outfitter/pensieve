@@ -80,6 +80,7 @@ Terms used throughout:
 8. The sink MUST support deployment inside a customer boundary, including an air-gapped network, with no call to a service outside that boundary.
 9. A filesystem backend MUST be available for development, MUST NOT sign storage statements, and MUST report every record it holds as non-conforming.
 10. The sink MUST verify payload availability on request by reading object metadata from the store, and MUST NOT answer an availability question from its own index alone.
+11. The sink MUST retain each storage statement under the same retention floor as the record it covers and MUST make the exact statement retrievable by record digest.
 
 ### SRV-001.6: Retention, Holds, and Disposition
 

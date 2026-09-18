@@ -39,6 +39,8 @@ Imported records are explicitly reconstructed (`provenance: "imported"`,
 - **`sink.ts`** — ingest rejects a record whose declared identity is not the authenticated principal, and rejects agent work attributed to a human account.
 
 Verification reads records back from the store and re-derives their digests. It never returns a conclusion from the index.
+The corresponding signed lock proof is retained under the same floor and is
+available to read-only verifiers at `GET /v0/statements/<record-digest>`.
 
 Opaque payloads can bypass the sink's data path when the S3 backend is active:
 

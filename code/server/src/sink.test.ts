@@ -151,6 +151,26 @@ describe("storage statements", () => {
 		expect(statement.content_digest).toMatch(/^[0-9a-f]{64}$/);
 		expect(statement.mechanism).toBe("filesystem");
 	});
+
+	// THIS TEST VALIDATES HARD REQUIREMENTS (SRV-001.5.11, RTR-001.1.8)
+	test("a later verifier can retrieve the exact statement by record digest", async () => {
+		const { handle } = await app();
+		const response = await handle(post("/v0/records", commitEvidence()));
+		const created = await json<Created>(response);
+		const retrieved = await handle(new Request(`http://sink/v0/statements/${created.digest}`, {
+			headers: { authorization: "Bearer read:gate" },
+		}));
+		expect(retrieved.status).toBe(200);
+		expect(await retrieved.json()).toEqual(created.statement);
+	});
+
+	test("an unknown record has no storage statement", async () => {
+		const { handle } = await app();
+		const response = await handle(new Request(`http://sink/v0/statements/${"f".repeat(64)}`, {
+			headers: { authorization: "Bearer read:gate" },
+		}));
+		expect(response.status).toBe(404);
+	});
 });
 
 describe("payload routes", () => {

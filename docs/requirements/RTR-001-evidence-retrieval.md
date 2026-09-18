@@ -36,6 +36,7 @@ COMPLIANCE mode, of which 2001 are backfilled Claude Code transcripts.
 | Obligation | State |
 | --- | --- |
 | Read a record by digest | met — `GET /v0/records/<digest>` |
+| Read its storage statement by record digest | implemented, not yet deployed — `GET /v0/statements/<digest>` |
 | Read a payload by digest | **unmet** — no route; bytes are reachable only with direct store credentials |
 | Find a session without a digest | **unmet** — the index carries no session, identity, or repository dimension |
 | Resolve a commit or patch to evidence | met — `GET /v0/commits/<sha>`, `GET /v0/patches/<id>` |
@@ -54,6 +55,7 @@ COMPLIANCE mode, of which 2001 are backfilled Claude Code transcripts.
 5. Retrieval of a payload MUST NOT require credentials for the underlying store. A reader who must be handed store credentials to read evidence has been handed the ability to write it.
 6. A record response MUST include, or link by digest, the storage statement covering it.
 7. A request for a digest the sink does not hold MUST return 404 and MUST NOT distinguish "never written" from "written and disposed" in the status code alone. The distinction belongs in the body, as a disposition event.
+8. A principal holding a record digest MUST be able to retrieve the exact signed storage statement issued when that record was accepted, without credentials for the underlying store.
 
 ### RTR-001.2: Discovery Without a Digest
 
