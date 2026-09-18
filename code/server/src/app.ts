@@ -1,4 +1,4 @@
-import { authenticate } from "./auth.ts";
+import { authenticate, OidcAuthenticator } from "./auth.ts";
 import type { Config } from "./config.ts";
 import { RecordIndex } from "./db.ts";
 import { Signer } from "./identity.ts";
@@ -33,6 +33,7 @@ export async function createApp(config: Config): Promise<App> {
 	const signer = await Signer.create({ id: config.sinkId, privateKeyPkcs8Base64: config.signingKey });
 	const index = new RecordIndex(config.indexPath);
 	const sink = new Sink(store, signer, index, config.retentionFloorDays);
+	const oidc = config.oidc ? new OidcAuthenticator(config.oidc) : undefined;
 
 	async function route(request: Request): Promise<Response> {
 		const url = new URL(request.url);
@@ -49,7 +50,8 @@ export async function createApp(config: Config): Promise<App> {
 			return Response.json({ ...sink.identity, conforming: sink.conforming, mechanism: store.kind });
 		}
 
-		const principal = authenticate(request, config.devAuth);
+		const principal = await authenticate(request, config.devAuth, oidc);
+		if (method === "GET" && !principal.canRead) return problem(403, "principal may not read evidence");
 
 		if (path === "/v0/records" && method === "POST") {
 			const stored = await sink.ingest(await request.json(), principal);
@@ -175,6 +177,11 @@ export async function createApp(config: Config): Promise<App> {
 				const found = await sink.readRecord(record);
 				return found ? Response.json(found) : problem(404, "no such record");
 			}
+			const statement = hexParam(path, "statements", 64);
+			if (statement) {
+				const found = await sink.readStatement(statement);
+				return found ? Response.json(found) : problem(404, "no such statement");
+			}
 			const commit = hexParam(path, "commits", 40);
 			if (commit) return Response.json(await sink.commitCoverage(commit));
 
@@ -183,6 +190,7 @@ export async function createApp(config: Config): Promise<App> {
 		}
 
 		if (path === "/v0/coverage" && method === "POST") {
+			if (!principal.canRead) return problem(403, "principal may not read evidence");
 			const body = (await request.json()) as { commits?: unknown };
 			if (!Array.isArray(body.commits)) return problem(400, "body must carry a commits array");
 			return Response.json(await sink.rangeCoverage(body.commits as string[]));

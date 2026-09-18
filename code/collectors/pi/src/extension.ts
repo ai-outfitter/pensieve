@@ -6,13 +6,12 @@
  * payload, and `tool_call` / `tool_result` carry full input and result content
  * — so it is the only harness on which `model-exchange` is not a declared gap.
  *
- * But Pi resolves configuration from `~/.pi/agent/` and project `.pi/` only.
- * There is no managed scope a session cannot override, and `--no-extensions`
- * disables extension discovery outright. So the authoritative install point is
- * a root-owned launcher wrapper, and this collector reports
- * `install_scope: "launcher"` rather than `"managed"` — a verifier reads that
- * and knows collection here was advisory. Reporting it as managed is
- * forbidden. CLC-001.2.4, CLC-001.2.7, CLC-001.8.3.
+ * Pi's own user/project configuration is advisory: `--no-extensions` can
+ * disable it. A launcher installation therefore reports `install_scope:
+ * "launcher"`. Agent Operator instead injects this extension through its
+ * root-owned Outfitter system hook and projects an operator-owned managed
+ * configuration file. Only that path can report `install_scope: "managed"`.
+ * CLC-001.2.4, CLC-001.2.7, CLC-001.8.3.
  */
 // Relative rather than the @pensieve/collector-core workspace alias: this file
 // is the repository's Pi-package entry, loaded from a bare `pi install` git
@@ -21,6 +20,7 @@ import {
 	buildContext,
 	clientOptions,
 	CommitWatcher,
+	effectiveCollectorEnvironment,
 	MemorySegmentStore,
 	PensieveClient,
 } from "../../core/src/index.ts";
@@ -30,7 +30,20 @@ interface ExtensionAPI {
 	on(event: string, handler: (event: unknown, context?: unknown) => unknown): void;
 }
 
+type ToolCallEvent = {
+	toolCallId?: string;
+	toolName?: string;
+	input?: unknown;
+};
+
+type ToolResultEvent = ToolCallEvent & {
+	content?: unknown;
+	details?: unknown;
+	isError?: boolean;
+};
+
 export default function pensieveCollector(pi: ExtensionAPI): void {
+	const environment = effectiveCollectorEnvironment(process.env);
 	const context = buildContext(
 		{
 			harness: "pi",
@@ -42,9 +55,9 @@ export default function pensieveCollector(pi: ExtensionAPI): void {
 			run: process.env.PENSIEVE_RUN ?? crypto.randomUUID(),
 			cwd: process.cwd(),
 		},
-		process.env,
+		environment,
 	);
-	const client = new PensieveClient(clientOptions(process.env));
+	const client = new PensieveClient(clientOptions(environment));
 	// In-process, so segment state stays in memory; the command hooks pass a
 	// file-backed store to the same watcher.
 	const watcher = new CommitWatcher(context, client, new MemorySegmentStore());
@@ -84,22 +97,80 @@ export default function pensieveCollector(pi: ExtensionAPI): void {
 		// Status and headers only; the body is reconstructed from message events
 		// rather than handed over. Recorded as what it is, not as a full exchange.
 		const record = watcher.base("model-exchange");
-		await client.submit({
+		const stored = await client.submit({
 			...record,
 			direction: "response-metadata",
 			status: response.status,
 			headers: response.headers,
 		});
+		watcher.note("model-exchange", stored.digest);
 	});
 
-	on("tool_result", async (event) => {
-		const result = event as { toolName?: string; input?: unknown; content?: unknown; isError?: boolean };
+	// The prompt and resolved system prompt are part of the session log. This is
+	// also where the policy that shaped the request becomes inspectable rather
+	// than an uncheckable claim about which profile was active.
+	on("before_agent_start", async (event) => {
+		const started = event as {
+			prompt?: string;
+			images?: unknown;
+			systemPrompt?: string;
+			systemPromptOptions?: unknown;
+		};
+		const record = watcher.base("transcript");
+		const result = await client.submit({
+			...record,
+			event: "before-agent-start",
+			prompt: started.prompt,
+			images: started.images,
+			system_prompt: started.systemPrompt,
+			system_prompt_options: started.systemPromptOptions,
+		});
+		watcher.note("transcript", result.digest);
+	});
+
+	// Pi emits the complete message after streaming finishes. Recording the
+	// message here captures user, assistant, reasoning/thinking, and tool-result
+	// content exactly as the harness exposes it without duplicating every token
+	// delta from message_update. Provider-private chain of thought is not exposed
+	// by Pi and therefore cannot be captured or claimed.
+	on("message_end", async (event) => {
+		const ended = event as { message?: unknown };
+		const record = watcher.base("transcript");
+		const result = await client.submit({
+			...record,
+			event: "message-end",
+			message: ended.message,
+		});
+		watcher.note("transcript", result.digest);
+	});
+
+	// Preserve the requested call even if the process crashes or the tool never
+	// returns. The result is a second record with the same tool_call_id, so an
+	// auditor can distinguish "requested", "completed", and "missing result".
+	on("tool_call", async (event) => {
+		const call = event as ToolCallEvent;
 		const record = watcher.base("tool-call");
 		const stored = await client.submit({
 			...record,
+			phase: "call",
+			tool_call_id: call.toolCallId,
+			tool_name: call.toolName,
+			tool_input: call.input,
+		});
+		watcher.note("tool-call", stored.digest);
+	});
+
+	on("tool_result", async (event) => {
+		const result = event as ToolResultEvent;
+		const record = watcher.base("tool-call");
+		const stored = await client.submit({
+			...record,
+			phase: "result",
+			tool_call_id: result.toolCallId,
 			tool_name: result.toolName,
 			tool_input: result.input,
 			tool_output: result.content,
+			tool_details: result.details,
 			is_error: result.isError ?? false,
 		});
 		watcher.note("tool-call", stored.digest);
@@ -112,6 +183,15 @@ export default function pensieveCollector(pi: ExtensionAPI): void {
 		await watcher.check();
 		await watcher.finish();
 		// Deferred delivery for anything the sink refused while offline.
-		await client.flush();
+		const flushed = await client.flush();
+		// Normal resident capture is availability-first: a durable workspace spool
+		// survives a transient sink outage. The operator acceptance probe instead
+		// runs in an ephemeral workspace, so success with a non-empty spool would
+		// permanently lose the very evidence being accepted. Fail that one-shot
+		// process without changing resident-session behavior.
+		if (environment.PENSIEVE_FAIL_CLOSED === "1" && flushed.remaining > 0) {
+			console.error(`pensieve collector: ${flushed.remaining} records remain undelivered`);
+			process.exitCode = 1;
+		}
 	});
 }

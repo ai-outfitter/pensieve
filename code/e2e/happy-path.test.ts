@@ -112,6 +112,7 @@ integrationTest("a committed agent session produces sealed evidence discoverable
 		"PENSIEVE_INSTALL_SCOPE",
 		"PENSIEVE_REQUIRED_CLASSES",
 		"PENSIEVE_PROFILE",
+		"PENSIEVE_COLLECTOR_REVISION",
 	] as const;
 	const previousEnv = Object.fromEntries(envKeys.map((key) => [key, Bun.env[key]]));
 	let server: ReturnType<typeof Bun.serve> | undefined;
@@ -144,6 +145,7 @@ integrationTest("a committed agent session produces sealed evidence discoverable
 			PENSIEVE_INSTALL_SCOPE: "managed",
 			PENSIEVE_REQUIRED_CLASSES: "session,tool-call",
 			PENSIEVE_PROFILE: "e2e",
+			PENSIEVE_COLLECTOR_REVISION: "e".repeat(40),
 		});
 
 		const hookOptions = {

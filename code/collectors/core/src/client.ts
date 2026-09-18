@@ -5,6 +5,8 @@ import type { EvidenceRecord } from "./types.ts";
 export interface ClientOptions {
 	sink: string;
 	token: string;
+	/** Rotating workload token. Read immediately before each request. */
+	tokenFile?: string;
 	/** Durable local buffer. A record is spooled before it is forwarded. CLC-001.6.1. */
 	spool: string;
 	emergencySink?: string;
@@ -74,7 +76,7 @@ export class PensieveClient {
 				continue;
 			}
 			try {
-				const digest = await this.post(this.options.sink, this.options.token, body);
+				const digest = await this.post(this.options.sink, await this.primaryToken(), body);
 				await unlink(path);
 				delivered.set(path, digest);
 			} catch {
@@ -83,6 +85,14 @@ export class PensieveClient {
 			}
 		}
 		return delivered;
+	}
+
+	private async primaryToken(): Promise<string> {
+		const token = this.options.tokenFile
+			? (await readFile(this.options.tokenFile, "utf8")).trim()
+			: this.options.token.trim();
+		if (!token) throw new Error("Pensieve bearer token is unavailable");
+		return token;
 	}
 
 	private async post(sink: string, token: string, body: string): Promise<string> {

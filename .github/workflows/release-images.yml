@@ -31,6 +31,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       IMAGE: ghcr.io/${{ github.repository }}
+      WORKBENCH_IMAGE: ghcr.io/${{ github.repository }}-workbench
       RELEASE_TAG: ${{ inputs.release_tag }}
     steps:
       - uses: actions/checkout@v6
@@ -67,6 +68,26 @@ jobs:
           tags: |
             ${{ env.IMAGE }}:${{ env.RELEASE_TAG }}
             ${{ env.IMAGE }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ env.VERSION }}
+
+      # Resident agents need the root-installed Pi launcher collector, not only
+      # the evidence sink. Publish it from the same immutable release so an
+      # Agent spec can pin the exact collector and Outfitter filesystem together.
+      - name: Build and publish resident workbench image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/workbench.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          cache-from: type=gha,scope=workbench
+          cache-to: type=gha,mode=max,scope=workbench
+          tags: |
+            ${{ env.WORKBENCH_IMAGE }}:${{ env.RELEASE_TAG }}
+            ${{ env.WORKBENCH_IMAGE }}:sha-${{ github.sha }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}

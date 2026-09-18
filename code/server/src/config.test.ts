@@ -66,3 +66,41 @@ describe("S3 public endpoint", () => {
 		).toThrow("PENSIEVE_S3_PUBLIC_ENDPOINT is not a URL");
 	});
 });
+
+describe("OIDC trust configuration", () => {
+	test("loads separate resident-writer and GitHub-auditor issuers", () => {
+		const trusts = [
+			{
+				issuer: "https://oidc.eks.example.test/id/cluster",
+				audience: "pensieve",
+				writeSubjectPattern: "^system:serviceaccount:agent-[a-z0-9-]+:agent-runtime$",
+			},
+			{
+				issuer: "https://token.actions.githubusercontent.com",
+				audience: "ai-outfitter-pensieve",
+				readSubjectPattern: "^repo:Unsupervisedcom/\\.agents:ref:refs/heads/main$",
+			},
+		];
+		expect(loadConfig({ PENSIEVE_OIDC_TRUSTS: JSON.stringify(trusts) }).oidc).toEqual(trusts);
+	});
+
+	test("rejects unanchored, authority-free, and duplicate trusts", () => {
+		expect(() => loadConfig({ PENSIEVE_OIDC_TRUSTS: JSON.stringify([{
+			issuer: "https://issuer", audience: "pensieve", readSubjectPattern: ".*",
+		}]) })).toThrow("must be anchored");
+		expect(() => loadConfig({ PENSIEVE_OIDC_TRUSTS: JSON.stringify([{
+			issuer: "https://issuer", audience: "pensieve",
+		}]) })).toThrow("authorizes neither");
+		const trust = { issuer: "https://issuer", audience: "pensieve", readSubjectPattern: "^auditor$" };
+		expect(() => loadConfig({ PENSIEVE_OIDC_TRUSTS: JSON.stringify([trust, trust]) })).toThrow("duplicate");
+	});
+
+	test("rejects ambiguous JSON and legacy trust configuration", () => {
+		expect(() => loadConfig({
+			PENSIEVE_OIDC_TRUSTS: JSON.stringify([{
+				issuer: "https://issuer", audience: "pensieve", readSubjectPattern: "^auditor$",
+			}]),
+			PENSIEVE_OIDC_ISSUER: "https://legacy-issuer",
+		})).toThrow("cannot be combined");
+	});
+});

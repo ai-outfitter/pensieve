@@ -54,6 +54,8 @@ export interface Principal {
 	identity: string;
 	/** Read-only principals can never write evidence. CICD-001.6.4. */
 	canWrite: boolean;
+	/** Write-only resident identities cannot retrieve customer evidence. RTR-001.5.1. */
+	canRead: boolean;
 }
 
 export class AuthError extends Error {
@@ -213,6 +215,17 @@ export class Sink {
 		const statement: StorageStatement = this.signer.identity.attested
 			? { ...unsigned, signature: await this.signer.sign(unsigned as unknown as Record<string, unknown>) }
 			: unsigned;
+		// The ingestion response is not durable evidence: collectors may crash
+		// after the sink accepts a record, and the resident collector intentionally
+		// keeps only the returned digest. Persist the exact signed statement beside
+		// the record so a later independent verifier can retrieve and validate the
+		// lock proof by digest. The statement object is locked under the same floor;
+		// its Ed25519 signature still authenticates the record-lock fields.
+		await this.store.put(
+			`statements/${digest.slice(0, 2)}/${digest}.json`,
+			ENCODER.encode(canonicalize(statement)),
+			{ contentType: "application/json", retainUntil: this.retainUntil() },
+		);
 
 		this.index.insert({
 			digest,
@@ -272,6 +285,25 @@ export class Sink {
 		if (!bytes) return null;
 		if (sha256Hex(bytes) !== digest) throw new Error(`record ${digest} failed digest verification`);
 		return JSON.parse(DECODER.decode(bytes)) as BaseRecord;
+	}
+
+	/** Retrieve the signed lock proof issued when a record was accepted. */
+	async readStatement(digest: string): Promise<StorageStatement | null> {
+		const key = `statements/${digest.slice(0, 2)}/${digest}.json`;
+		const head = await this.store.head(key);
+		if (!head) return null;
+		const bytes = await this.store.get(key, head.version);
+		if (!bytes) return null;
+		let statement: StorageStatement;
+		try {
+			statement = JSON.parse(DECODER.decode(bytes)) as StorageStatement;
+		} catch {
+			throw new StoreError(`statement ${digest} is not valid JSON`, 409);
+		}
+		if (statement.record_digest !== digest || statement.content_digest !== digest) {
+			throw new StoreError(`statement ${digest} does not bind its record`, 409);
+		}
+		return statement;
 	}
 
 	/**

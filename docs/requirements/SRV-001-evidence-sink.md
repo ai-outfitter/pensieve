@@ -40,6 +40,11 @@ Terms used throughout:
 6. The sink MUST reject evidence submitted by a CI job on behalf of a session that ran elsewhere.
 7. The sink MUST record the authenticated principal, the source address, and the receipt time for every accepted record.
 8. The sink MUST accept out-of-order and late delivery, and MUST NOT reject a record because a related record has not arrived.
+9. A bearer workload token MUST be verified against the configured issuer's signing key, issuer, audience, activation time, expiry, and an allowlisted subject pattern before its subject becomes the authenticated principal.
+10. Development bearer forms MUST be rejected for both read and write access whenever development authentication is disabled.
+11. Signing-key rotation MUST be discovered without a sink restart. An unknown key identifier MUST cause one fresh key-set lookup before the request is rejected.
+12. The sink MUST support separately pinned issuer, audience, and subject-policy trust entries for resident writers and fulfillment auditors. Trusting one issuer MUST NOT grant a token from that issuer read or write authority absent its matching subject policy.
+13. The sink MUST reject a record claiming managed collector scope unless it carries a valid immutable collector revision.
 
 ### SRV-001.3: Record Model
 
@@ -77,6 +82,7 @@ Terms used throughout:
 8. The sink MUST support deployment inside a customer boundary, including an air-gapped network, with no call to a service outside that boundary.
 9. A filesystem backend MUST be available for development, MUST NOT sign storage statements, and MUST report every record it holds as non-conforming.
 10. The sink MUST verify payload availability on request by reading object metadata from the store, and MUST NOT answer an availability question from its own index alone.
+11. The sink MUST retain each storage statement under the same retention floor as the record it covers and MUST make the exact statement retrievable by record digest.
 
 ### SRV-001.6: Retention, Holds, and Disposition
 

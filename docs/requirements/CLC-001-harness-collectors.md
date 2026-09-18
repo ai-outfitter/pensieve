@@ -35,6 +35,7 @@ the failure this component exists to prevent.
 5. A collector MUST record the harness name, the harness version, and the observable invocation arguments in its session record.
 6. Where a harness supports a managed-only mode that ignores user and project hook configuration, the organization SHOULD enable it, and the collector MUST record whether it was in force.
 7. Where a harness offers no managed scope, the organization MUST treat the launcher as the only install point, and the deployment MUST NOT present workstation collection for that harness as authoritative.
+8. A managed collector MUST bind its immutable collector revision into every record it emits so a verifier can prove the captured bytes came from the revision the deployment reports.
 
 ### CLC-001.3: Commit Segmentation
 
@@ -90,6 +91,9 @@ the failure this component exists to prevent.
 2. A collector for a harness whose hooks do not expose model requests and responses MUST declare the `model-exchange` class as a gap. A conversation transcript MUST NOT be recorded as satisfying that class.
 3. A collector MUST prefer an in-process event surface over a reconstructed one where the harness provides both.
 4. A collector MUST record the exact event surface it used, so that a coverage report is computed from what ran rather than asserted from documentation.
+5. The Pi collector MUST record the fully assembled prompt and system prompt exposed before an agent turn as transcript evidence.
+6. The Pi collector MUST record each completed message exactly as the harness exposes it, including exposed reasoning or thinking content. It MUST NOT claim to capture provider-private reasoning that the harness does not expose.
+7. The Pi collector MUST record a tool-call intent before execution and its result as a separate record after execution. Both records MUST carry the harness tool-call identifier so a missing result remains distinguishable from a tool that never ran.
 
 ### CLC-001.8: Bypass
 

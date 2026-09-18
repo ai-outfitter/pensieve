@@ -54,6 +54,7 @@ export interface BaseRecord {
 	created_at: string;
 	install_scope?: InstallScope;
 	harness?: string;
+	collector_revision?: string;
 	payload?: PayloadRef;
 	retention?: { payload: string; record: string };
 	[key: string]: unknown;
@@ -159,6 +160,10 @@ export function validateRecord(input: unknown): BaseRecord {
 	}
 	if (record.install_scope !== undefined && !INSTALL_SCOPES.includes(record.install_scope as InstallScope)) {
 		throw new RecordError(`unknown install_scope "${String(record.install_scope)}"`);
+	}
+	if (record.install_scope === "managed"
+		&& (typeof record.collector_revision !== "string" || !/^[0-9a-f]{40}$/.test(record.collector_revision))) {
+		throw new RecordError("managed records must carry a 40-character collector_revision");
 	}
 	if (record.payload !== undefined) validatePayloadRef(record.payload);
 

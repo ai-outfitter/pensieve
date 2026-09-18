@@ -33,6 +33,7 @@ export interface CollectorContext {
 	install_scope: InstallScope;
 	harness: string;
 	harness_version: string;
+	collector_revision: string;
 	/** The event surface actually used, so coverage is computed, not asserted. CLC-001.7.4. */
 	event_surface: string;
 	profile: CaptureProfile;
@@ -49,6 +50,7 @@ export interface EvidenceRecord {
 	created_at: string;
 	install_scope: InstallScope;
 	harness: string;
+	collector_revision: string;
 	[key: string]: unknown;
 }
 

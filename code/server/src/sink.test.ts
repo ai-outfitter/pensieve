@@ -26,6 +26,7 @@ const BASE = {
 	environment: "workstation",
 	policy_digest: "sha256:policy",
 	created_at: "2026-08-07T00:00:00.000Z",
+	collector_revision: "e".repeat(40),
 };
 
 function commitEvidence(overrides: Record<string, unknown> = {}) {
@@ -111,6 +112,30 @@ describe("ingest", () => {
 		expect(response.status).toBe(403);
 	});
 
+	// THIS TEST VALIDATES A HARD REQUIREMENT (RTR-001.5.1)
+	test("a resident writer may not read evidence", async () => {
+		const { handle } = await app();
+		const created = await handle(post("/v0/records", commitEvidence()));
+		const { digest } = await json<Created>(created);
+		const response = await handle(new Request(`http://sink/v0/records/${digest}`, {
+			headers: { authorization: "Bearer dev:agent:engineer" },
+		}));
+		expect(response.status).toBe(403);
+	});
+
+	test("a resident writer may not query coverage through POST", async () => {
+		const { handle } = await app();
+		const response = await handle(post("/v0/coverage", { commits: ["a".repeat(40)] }));
+		expect(response.status).toBe(403);
+	});
+
+	test("a managed record without an immutable collector revision is rejected", async () => {
+		const { handle } = await app();
+		const response = await handle(post("/v0/records", commitEvidence({ collector_revision: undefined })));
+		expect(response.status).toBe(400);
+		expect((await json<{ error: string }>(response)).error).toContain("collector_revision");
+	});
+
 	// THIS TEST VALIDATES A HARD REQUIREMENT (SRV-001.4.5)
 	test("an unmet required capture class seals the record failed-evidence", async () => {
 		const { handle } = await app();
@@ -150,6 +175,26 @@ describe("storage statements", () => {
 		expect(statement.record_digest).toBe(digest);
 		expect(statement.content_digest).toMatch(/^[0-9a-f]{64}$/);
 		expect(statement.mechanism).toBe("filesystem");
+	});
+
+	// THIS TEST VALIDATES HARD REQUIREMENTS (SRV-001.5.11, RTR-001.1.8)
+	test("a later verifier can retrieve the exact statement by record digest", async () => {
+		const { handle } = await app();
+		const response = await handle(post("/v0/records", commitEvidence()));
+		const created = await json<Created>(response);
+		const retrieved = await handle(new Request(`http://sink/v0/statements/${created.digest}`, {
+			headers: { authorization: "Bearer read:gate" },
+		}));
+		expect(retrieved.status).toBe(200);
+		expect(await retrieved.json()).toEqual(created.statement);
+	});
+
+	test("an unknown record has no storage statement", async () => {
+		const { handle } = await app();
+		const response = await handle(new Request(`http://sink/v0/statements/${"f".repeat(64)}`, {
+			headers: { authorization: "Bearer read:gate" },
+		}));
+		expect(response.status).toBe(404);
 	});
 });
 

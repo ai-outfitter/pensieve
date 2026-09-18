@@ -69,6 +69,7 @@ export function baseRecord(context: CollectorContext, kind: RecordKind): Evidenc
 		install_scope: context.install_scope,
 		harness: context.harness,
 		harness_version: context.harness_version,
+		collector_revision: context.collector_revision,
 		// The event surface actually used, so coverage is computed rather than
 		// asserted from documentation. CLC-001.7.4.
 		event_surface: context.event_surface,
@@ -164,12 +165,19 @@ export class CommitWatcher {
 	 */
 	async finish(): Promise<void> {
 		if (this.store.digests.length === 0 && this.store.captured.length === 0) return;
+		const captured = [...this.store.captured];
 		await this.client.submit({
 			...this.base("session"),
 			terminal: true,
 			uncommitted: true,
 			segment: [...this.store.digests],
-			captured: [...this.store.captured],
+			captured,
+			capture: {
+				profile: this.context.profile.name,
+				required: this.context.profile.required,
+				captured,
+				gaps: computeGaps(this.context.profile, captured),
+			},
 		});
 		this.store.reset();
 	}
