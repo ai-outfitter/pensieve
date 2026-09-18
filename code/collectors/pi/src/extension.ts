@@ -6,13 +6,12 @@
  * payload, and `tool_call` / `tool_result` carry full input and result content
  * — so it is the only harness on which `model-exchange` is not a declared gap.
  *
- * But Pi resolves configuration from `~/.pi/agent/` and project `.pi/` only.
- * There is no managed scope a session cannot override, and `--no-extensions`
- * disables extension discovery outright. So the authoritative install point is
- * a root-owned launcher wrapper, and this collector reports
- * `install_scope: "launcher"` rather than `"managed"` — a verifier reads that
- * and knows collection here was advisory. Reporting it as managed is
- * forbidden. CLC-001.2.4, CLC-001.2.7, CLC-001.8.3.
+ * Pi's own user/project configuration is advisory: `--no-extensions` can
+ * disable it. A launcher installation therefore reports `install_scope:
+ * "launcher"`. Agent Operator instead injects this extension through its
+ * root-owned Outfitter system hook and projects an operator-owned managed
+ * configuration file. Only that path can report `install_scope: "managed"`.
+ * CLC-001.2.4, CLC-001.2.7, CLC-001.8.3.
  */
 // Relative rather than the @pensieve/collector-core workspace alias: this file
 // is the repository's Pi-package entry, loaded from a bare `pi install` git
@@ -21,6 +20,7 @@ import {
 	buildContext,
 	clientOptions,
 	CommitWatcher,
+	effectiveCollectorEnvironment,
 	MemorySegmentStore,
 	PensieveClient,
 } from "../../core/src/index.ts";
@@ -43,6 +43,7 @@ type ToolResultEvent = ToolCallEvent & {
 };
 
 export default function pensieveCollector(pi: ExtensionAPI): void {
+	const environment = effectiveCollectorEnvironment(process.env);
 	const context = buildContext(
 		{
 			harness: "pi",
@@ -54,9 +55,9 @@ export default function pensieveCollector(pi: ExtensionAPI): void {
 			run: process.env.PENSIEVE_RUN ?? crypto.randomUUID(),
 			cwd: process.cwd(),
 		},
-		process.env,
+		environment,
 	);
-	const client = new PensieveClient(clientOptions(process.env));
+	const client = new PensieveClient(clientOptions(environment));
 	// In-process, so segment state stays in memory; the command hooks pass a
 	// file-backed store to the same watcher.
 	const watcher = new CommitWatcher(context, client, new MemorySegmentStore());
@@ -182,6 +183,15 @@ export default function pensieveCollector(pi: ExtensionAPI): void {
 		await watcher.check();
 		await watcher.finish();
 		// Deferred delivery for anything the sink refused while offline.
-		await client.flush();
+		const flushed = await client.flush();
+		// Normal resident capture is availability-first: a durable workspace spool
+		// survives a transient sink outage. The operator acceptance probe instead
+		// runs in an ephemeral workspace, so success with a non-empty spool would
+		// permanently lose the very evidence being accepted. Fail that one-shot
+		// process without changing resident-session behavior.
+		if (environment.PENSIEVE_FAIL_CLOSED === "1" && flushed.remaining > 0) {
+			console.error(`pensieve collector: ${flushed.remaining} records remain undelivered`);
+			process.exitCode = 1;
+		}
 	});
 }

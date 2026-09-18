@@ -185,4 +185,41 @@ describe("Pi collector runtime", () => {
 			await rm(spool, { recursive: true, force: true });
 		}
 	});
+
+	test("fails an ephemeral acceptance probe when records remain undelivered", async () => {
+		const spool = await mkdtemp(join(tmpdir(), "pensieve-pi-fail-closed-"));
+		const originalFetch = globalThis.fetch;
+		const originalExitCode = process.exitCode;
+		const originalEnv = { ...process.env };
+		const handlers = new Map<string, (event: unknown) => Promise<unknown>>();
+
+		try {
+			process.env.PENSIEVE_SINK = "https://pensieve.test";
+			process.env.PENSIEVE_TOKEN = "test-token";
+			process.env.PENSIEVE_SPOOL = spool;
+			process.env.PENSIEVE_RUN = "run-acceptance-failure";
+			process.env.PENSIEVE_FAIL_CLOSED = "1";
+			globalThis.fetch = (async () => new Response("offline", { status: 503 })) as typeof fetch;
+
+			const loaded = await import(`./extension.ts?fail-closed=${crypto.randomUUID()}`);
+			loaded.default({
+				on(name: string, handler: (event: unknown) => Promise<unknown>) {
+					handlers.set(name, handler);
+				},
+			});
+
+			await handlers.get("session_start")?.({ type: "session_start", reason: "startup" });
+			await handlers.get("session_shutdown")?.({ type: "session_shutdown", reason: "quit" });
+
+			expect(process.exitCode).toBe(1);
+		} finally {
+			globalThis.fetch = originalFetch;
+			process.exitCode = originalExitCode;
+			for (const key of Object.keys(process.env)) {
+				if (!(key in originalEnv)) delete process.env[key];
+			}
+			Object.assign(process.env, originalEnv);
+			await rm(spool, { recursive: true, force: true });
+		}
+	});
 });
