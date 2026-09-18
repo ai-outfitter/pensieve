@@ -92,6 +92,11 @@ describe("Pi collector runtime", () => {
 				type: "before_provider_request",
 				payload: { model: "test-model", messages: [{ role: "user", content: "inspect" }] },
 			});
+			await handlers.get("after_provider_response")?.({
+				type: "after_provider_response",
+				status: 200,
+				headers: { "x-request-id": "request-1" },
+			});
 			await handlers.get("message_end")?.({
 				type: "message_end",
 				message: {
@@ -136,6 +141,12 @@ describe("Pi collector runtime", () => {
 					kind: "model-exchange",
 					direction: "request",
 					payload: expect.objectContaining({ model: "test-model" }),
+				}),
+				expect.objectContaining({
+					kind: "model-exchange",
+					direction: "response-metadata",
+					status: 200,
+					headers: { "x-request-id": "request-1" },
 				}),
 				expect.objectContaining({
 					kind: "tool-call",

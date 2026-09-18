@@ -96,12 +96,13 @@ export default function pensieveCollector(pi: ExtensionAPI): void {
 		// Status and headers only; the body is reconstructed from message events
 		// rather than handed over. Recorded as what it is, not as a full exchange.
 		const record = watcher.base("model-exchange");
-		await client.submit({
+		const stored = await client.submit({
 			...record,
 			direction: "response-metadata",
 			status: response.status,
 			headers: response.headers,
 		});
+		watcher.note("model-exchange", stored.digest);
 	});
 
 	// The prompt and resolved system prompt are part of the session log. This is
