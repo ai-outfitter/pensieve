@@ -9,6 +9,7 @@ A Bun workspace. Three published pieces and one shared library.
 | `@pensieve/collector-claude` | `collectors/claude/` | Claude Code collector — managed-settings hooks. |
 | `@pensieve/collector-codex` | `collectors/codex/` | Codex collector — managed lifecycle hooks. |
 | `@pensieve/collector-pi` | `collectors/pi/` | Pi collector — in-process extension. |
+| `@pensieve/eval` | `eval/` | Evaluation bundles: writer, offline validator, comparator, `pensieve-eval` CLI. Implements [EVL-001](../docs/requirements/EVL-001-evaluation-bundles.md) (proposed). |
 | `@pensieve/importer` | `importer/` | Client-only import of historical Claude Code, Codex, and pi transcripts. |
 | — | `example-repo/` | The forge gates as GitHub workflows and rulesets. Implements [CICD-001](../docs/requirements/CICD-001-evidence-gates.md). |
 
@@ -17,6 +18,14 @@ bun install
 bun test          # requirement-pinned tests carry a HARD REQUIREMENT comment
 bunx tsc --noEmit
 sh scripts/build-collectors.sh dist
+```
+
+Evaluation bundles ([EVL-001](../docs/requirements/EVL-001-evaluation-bundles.md)) are validated and compared offline:
+
+```sh
+bun run eval/src/cli.ts validate <bundle-dir...> [--publication] [--json]
+bun run eval/src/cli.ts compare <baseline-dir> <candidate-dir> [--json]
+bun run eval/src/cli.ts summary <bundle-dir> [--json]
 ```
 
 Historical transcripts can be classified without writing anything:
@@ -77,7 +86,7 @@ docker compose up -d
 docker compose exec workbench outfitter
 ```
 
-`compose.yaml` starts MinIO with a bucket created **with object lock** and a default COMPLIANCE retention, the sink, and a workbench built `FROM ghcr.io/ai-outfitter/outfitter`. It installs the Claude and Codex hooks and the advisory Pi launcher before the image drops to uid 1000. The launcher does not intercept `outfitter run`; the workbench still needs explicit Outfitter-to-Pi extension wiring before that path collects Pi evidence.
+`compose.yaml` starts RustFS, the self-hosted object store, with a bucket created **with object lock** and a default COMPLIANCE retention, the sink, and a workbench built `FROM ghcr.io/ai-outfitter/outfitter`. It installs the Claude and Codex hooks and the advisory Pi launcher before the image drops to uid 1000. The launcher does not intercept `outfitter run`; the workbench still needs explicit Outfitter-to-Pi extension wiring before that path collects Pi evidence.
 
 The sink runs unattested until you give it a key, and says so on startup:
 

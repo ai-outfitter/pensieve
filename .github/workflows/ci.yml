@@ -27,22 +27,22 @@ jobs:
       # object store rejects mismatched bytes and refuses to let a client weaken
       # the retention lock. It is gated on PENSIEVE_S3_TEST_ENDPOINT, so without
       # a store it silently skips — which is exactly the test least worth having
-      # optional. A service container cannot pass MinIO its `server /data`
-      # argument, so it runs as a step.
-      - name: Start MinIO for the store integration test
+      # optional. RustFS is the self-hosted store (Object Lock, versioning); the
+      # test creates its own lock-enabled bucket.
+      - name: Start RustFS for the store integration test
         working-directory: .
         run: |
-          docker run -d --name minio -p 127.0.0.1:9000:9000 \
-            -e MINIO_ROOT_USER=pensieve \
-            -e MINIO_ROOT_PASSWORD=pensieve-dev-secret \
-            quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e \
-            server /data
+          docker run -d --name rustfs -p 127.0.0.1:9000:9000 \
+            -e RUSTFS_ACCESS_KEY=pensieve \
+            -e RUSTFS_SECRET_KEY=pensieve-dev-secret \
+            -e RUSTFS_ADDRESS=0.0.0.0:9000 \
+            docker.io/rustfs/rustfs@sha256:1803faef57627e2d9c2e7d89d655d712ddded5389040054987163043fecb6a3c
           for _ in $(seq 1 60); do
-            if curl -fsS -o /dev/null http://127.0.0.1:9000/minio/health/live; then exit 0; fi
+            if curl -fsS -o /dev/null http://127.0.0.1:9000/health; then exit 0; fi
             sleep 2
           done
-          echo "MinIO did not become healthy" >&2
-          docker logs minio >&2 || true
+          echo "RustFS did not become healthy" >&2
+          docker logs rustfs >&2 || true
           exit 1
 
       - run: bun run test

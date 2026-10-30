@@ -1,33 +1,8 @@
 import { CryptoHasher } from "bun";
+import { canonicalize } from "../../eval/src/canonical.ts";
 
-/**
- * One canonical serialization, so a record digest is reproducible by any
- * verifier that holds the record. SRV-001.3.3.
- *
- * Object keys sort by code unit. No insignificant whitespace. `undefined`
- * members are dropped rather than encoded, so an absent field and a field set
- * to `undefined` produce the same bytes.
- */
-export function canonicalize(value: unknown): string {
-	if (value === null) return "null";
-	if (typeof value === "number") {
-		if (!Number.isFinite(value)) throw new Error("cannot canonicalize a non-finite number");
-		return JSON.stringify(value);
-	}
-	if (typeof value === "boolean" || typeof value === "string") return JSON.stringify(value);
-	if (Array.isArray(value)) return `[${value.map((item) => canonicalize(item ?? null)).join(",")}]`;
-	if (typeof value === "object") {
-		const source = value as Record<string, unknown>;
-		const parts: string[] = [];
-		for (const key of Object.keys(source).sort()) {
-			const member = source[key];
-			if (member === undefined) continue;
-			parts.push(`${JSON.stringify(key)}:${canonicalize(member)}`);
-		}
-		return `{${parts.join(",")}}`;
-	}
-	throw new Error(`cannot canonicalize ${typeof value}`);
-}
+// One implementation for the server and evaluation bundles (SRV-001.3.3, EVL-001.1.2).
+export { canonicalize };
 
 export function sha256Hex(data: string | Uint8Array | ArrayBuffer): string {
 	const hasher = new CryptoHasher("sha256");
