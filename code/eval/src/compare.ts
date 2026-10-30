@@ -18,14 +18,15 @@ export type ProvenanceField = (typeof PROVENANCE_FIELDS)[number];
 
 /**
  * Which provenance differences each declared variable accounts for.
- * EVL-001.7.3. A prompt edit lands as a new commit, so `prompts` covers the
- * commit but not the workflow definition; a commit change covers everything
- * derived from source. Mode and recordings are never covered.
+ * EVL-001.7.3. A prompt edit lands as a new commit, and workflow prompts live
+ * inside the definition, so `prompts` covers both; a commit change covers
+ * everything derived from source. Mode, dirtiness, and recordings are never
+ * covered.
  */
 export const CHANGE_COVERS: Record<ChangeVariable, readonly ProvenanceField[]> = {
 	"model.id": ["model.id", "model.provider"],
 	"model.configuration": ["model.configuration"],
-	prompts: ["prompts", "subject.source.commit"],
+	prompts: ["prompts", "subject.source.commit", "subject.definition_digest"],
 	"subject.source.commit": ["subject.source.commit", "subject.definition_digest", "subject.version", "prompts"],
 };
 
