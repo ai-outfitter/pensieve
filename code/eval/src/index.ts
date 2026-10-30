@@ -10,7 +10,6 @@
  */
 export * from "./types.ts";
 export { canonicalize, canonicalDigest, sha256Hex } from "./canonical.ts";
-export { isSafePath, MAX_DEPTH, MAX_MANIFEST_BYTES, validateManifest, validateBundleFiles, type BundleFiles } from "./validate.ts";
-export { compareManifests, CHANGE_COVERS, type ComparisonReport, type CaseComparison, type ProvenanceField, type Transition } from "./compare.ts";
-export { findCredentials, findSecretKeys } from "./publication.ts";
-export { formatComparison, formatSummary, MODE_LABEL, summarize } from "./report.ts";
+export { MAX_MANIFEST_BYTES, validateManifest, validateBundleFiles, type BundleFiles } from "./validate.ts";
+export { compareManifests, type ComparisonReport, type CaseComparison, type ProvenanceField, type Transition } from "./compare.ts";
+export { formatComparison, formatSummary } from "./report.ts";

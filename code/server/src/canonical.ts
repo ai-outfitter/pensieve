@@ -1,8 +1,7 @@
 import { CryptoHasher } from "bun";
 import { canonicalize } from "../../eval/src/canonical.ts";
 
-// The algorithm lives in @pensieve/eval so the server and evaluation bundles
-// share one implementation (SRV-001.3.3, EVL-001.1.2).
+// One implementation for the server and evaluation bundles (SRV-001.3.3, EVL-001.1.2).
 export { canonicalize };
 
 export function sha256Hex(data: string | Uint8Array | ArrayBuffer): string {

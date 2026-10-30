@@ -162,7 +162,7 @@ export async function readManifest(dir: string): Promise<Manifest> {
 }
 
 /** Read every file under `dir`. Symlinks and special files are reported, never followed. EVL-001.2.3. */
-export async function readBundle(dir: string): Promise<BundleFiles> {
+async function readBundle(dir: string): Promise<BundleFiles> {
 	const files = new Map<string, Uint8Array>();
 	const issues: Issue[] = [];
 	async function walk(rel: string): Promise<void> {

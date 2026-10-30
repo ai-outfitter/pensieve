@@ -23,7 +23,7 @@ const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d
 
 /** Limits that keep validation bounded on hostile input. EVL-001.8.3. */
 export const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
-export const MAX_DEPTH = 32;
+const MAX_DEPTH = 32;
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);

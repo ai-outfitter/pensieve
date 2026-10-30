@@ -9,7 +9,7 @@ export function summarize(results: CaseResult[]): Summary {
 }
 
 /** Plain words for each mode, used everywhere a mode is shown. EVL-001.3.4. */
-export const MODE_LABEL: Record<Mode, string> = {
+const MODE_LABEL: Record<Mode, string> = {
 	recorded: "RECORDED (replayed model responses; no live model)",
 	"real-model": "REAL MODEL (live model; synthetic or recorded connectors)",
 	"live-provider": "LIVE PROVIDER (live model; real provider connectors)",

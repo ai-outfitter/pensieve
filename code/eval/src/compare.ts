@@ -23,7 +23,7 @@ export type ProvenanceField = keyof typeof PROVENANCE;
  * any other definition change shows up as undeclared. Anything not listed is
  * never covered.
  */
-export const CHANGE_COVERS: Record<ChangeVariable, readonly ProvenanceField[]> = {
+const CHANGE_COVERS: Record<ChangeVariable, readonly ProvenanceField[]> = {
 	"model.id": ["model.id", "model.provider"],
 	"model.configuration": ["model.configuration"],
 	prompts: ["prompts", "subject.source.commit"],
