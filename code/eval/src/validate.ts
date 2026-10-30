@@ -25,7 +25,10 @@ const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !
 /** Hand-written schema walker. Each helper records an issue and returns whether the value is usable. */
 class Checker {
 	readonly issues: Issue[] = [];
-	constructor(readonly file: string) {}
+	readonly file: string;
+	constructor(file: string) {
+		this.file = file;
+	}
 
 	fail(field: string, message: string): false {
 		this.issues.push({ file: this.file, field, message });

@@ -20,6 +20,14 @@ bunx tsc --noEmit
 sh scripts/build-collectors.sh dist
 ```
 
+Evaluation bundles ([EVL-001](../docs/requirements/EVL-001-evaluation-bundles.md)) are validated and compared offline:
+
+```sh
+bun run eval/src/cli.ts validate <bundle-dir...> [--publication] [--json]
+bun run eval/src/cli.ts compare <baseline-dir> <candidate-dir> [--json]
+bun run eval/src/cli.ts summary <bundle-dir> [--json]
+```
+
 Historical transcripts can be classified without writing anything:
 
 ```sh
