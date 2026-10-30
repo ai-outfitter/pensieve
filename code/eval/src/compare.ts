@@ -18,13 +18,15 @@ export type ProvenanceField = keyof typeof PROVENANCE;
 
 /**
  * Which differences each declared variable accounts for. EVL-001.7.3.
- * A prompt edit lands as a new commit, and workflow prompts live inside the
- * definition, so `prompts` covers both. Anything not listed is never covered.
+ * A prompt edit lands as a new commit, so `prompts` covers the commit. It does
+ * not cover the definition digest, which excludes prompt text (EVL-001.1.8), so
+ * any other definition change shows up as undeclared. Anything not listed is
+ * never covered.
  */
 export const CHANGE_COVERS: Record<ChangeVariable, readonly ProvenanceField[]> = {
 	"model.id": ["model.id", "model.provider"],
 	"model.configuration": ["model.configuration"],
-	prompts: ["prompts", "subject.source.commit", "subject.definition_digest"],
+	prompts: ["prompts", "subject.source.commit"],
 	"subject.source.commit": ["subject.source.commit", "subject.definition_digest", "subject.version", "prompts"],
 };
 

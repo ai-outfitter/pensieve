@@ -422,15 +422,25 @@ describe("comparison", () => {
 		expect(confounded.mismatch).toBe(true);
 	});
 
-	test("a prompt change may move the commit and the definition that holds it", async () => {
-		const report = await pair((m) => {
+	test("a declared prompt change covers the commit but not the definition", async () => {
+		// THIS TEST VALIDATES A HARD REQUIREMENT (EVL-001.7.3, EVL-001.1.8)
+		// YOU MUST NOT MODIFY THIS TEST UNLESS THE REQUIREMENT CHANGES
+		const declare = (m: Manifest) => {
 			m.prompts[0]!.digest = "9".repeat(64);
 			m.subject.source.commit = "a".repeat(40);
-			m.subject.definition_digest = "b".repeat(64);
 			m.change = { variable: "prompts", baseline: "base-run", description: "stricter consent wording" };
+		};
+		const clean = await pair(declare);
+		expect(clean.changes.map((c) => c.field)).toEqual(["subject.source.commit", "prompts"]);
+		expect(clean.mismatch).toBe(false);
+
+		// The definition digest excludes prompt text, so moving it means something else changed too.
+		const confounded = await pair((m) => {
+			declare(m);
+			m.subject.definition_digest = "b".repeat(64);
 		});
-		expect(report.changes.map((c) => c.field)).toEqual(["subject.definition_digest", "subject.source.commit", "prompts"]);
-		expect(report.mismatch).toBe(false);
+		expect(confounded.undeclared).toEqual(["subject.definition_digest"]);
+		expect(confounded.mismatch).toBe(true);
 	});
 
 	test("errors and missing results are never passes or regressions", async () => {

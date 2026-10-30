@@ -57,6 +57,7 @@ The manifest schema is the TypeScript `Manifest` type in
 5. JSON artifacts SHOULD be written as canonical JSON so that writing the same inputs twice produces byte-identical files.
 6. A manifest MUST NOT contain fields the standard does not define, except inside `model.configuration`. A validator MUST reject unknown fields rather than ignore them.
 7. Timestamps MUST be ISO-8601 date-times with an explicit offset, and `run.ended_at` MUST NOT be earlier than `run.started_at`.
+8. `subject.definition_digest` MUST be the canonical digest of the subject's definition with every prompt text listed in `prompts` removed, so that a prompt change never moves it and any other definition change does.
 
 ### EVL-001.2: Integrity
 
