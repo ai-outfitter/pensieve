@@ -118,10 +118,14 @@ export interface Manifest {
 	artifacts: Artifact[];
 }
 
-/** Optional, kept outside the manifest so a statement over it causes no digest cycle. EVL-001.5. */
+/**
+ * Optional, kept outside the manifest so a statement over it causes no digest
+ * cycle. The validator checks only `manifest_digest`; anything else in the
+ * file (such as sink statements) is carried, not verified. EVL-001.5.
+ */
 export interface Receipt {
 	manifest_digest: string;
-	statements: unknown[];
+	[key: string]: unknown;
 }
 
 /** One validation failure: which file, which field, what is wrong. */

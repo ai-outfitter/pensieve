@@ -1,27 +1,25 @@
 import { canonicalize } from "./canonical.ts";
 import type { CaseStatus, ChangeVariable, Manifest, Mode } from "./types.ts";
 
-/** Provenance fields a comparison inspects. EVL-001.7.2. */
-export const PROVENANCE_FIELDS = [
-	"mode",
-	"subject.version",
-	"subject.definition_digest",
-	"subject.source.commit",
-	"subject.source.dirty",
-	"prompts",
-	"model.provider",
-	"model.id",
-	"model.configuration",
-	"model.recordings_digest",
-] as const;
-export type ProvenanceField = (typeof PROVENANCE_FIELDS)[number];
+/** Provenance a comparison reports when it differs, field name → getter. EVL-001.7.2. */
+const PROVENANCE = {
+	"subject.version": (m: Manifest) => m.subject.version,
+	"subject.definition_digest": (m: Manifest) => m.subject.definition_digest,
+	"subject.source.commit": (m: Manifest) => m.subject.source.commit,
+	"subject.source.dirty": (m: Manifest) => m.subject.source.dirty,
+	"subject.source.paths": (m: Manifest) => m.subject.source.paths,
+	prompts: (m: Manifest) => Object.fromEntries(m.prompts.map((p) => [p.step, p.digest])),
+	"model.provider": (m: Manifest) => m.model.provider,
+	"model.id": (m: Manifest) => m.model.id,
+	"model.configuration": (m: Manifest) => m.model.configuration,
+	"model.recordings_digest": (m: Manifest) => m.model.recordings_digest,
+} as const;
+export type ProvenanceField = keyof typeof PROVENANCE;
 
 /**
- * Which provenance differences each declared variable accounts for.
- * EVL-001.7.3. A prompt edit lands as a new commit, and workflow prompts live
- * inside the definition, so `prompts` covers both; a commit change covers
- * everything derived from source. Mode, dirtiness, and recordings are never
- * covered.
+ * Which differences each declared variable accounts for. EVL-001.7.3.
+ * A prompt edit lands as a new commit, and workflow prompts live inside the
+ * definition, so `prompts` covers both. Anything not listed is never covered.
  */
 export const CHANGE_COVERS: Record<ChangeVariable, readonly ProvenanceField[]> = {
 	"model.id": ["model.id", "model.provider"],
@@ -30,20 +28,15 @@ export const CHANGE_COVERS: Record<ChangeVariable, readonly ProvenanceField[]> =
 	"subject.source.commit": ["subject.source.commit", "subject.definition_digest", "subject.version", "prompts"],
 };
 
-function provenance(m: Manifest, field: ProvenanceField): unknown {
-	switch (field) {
-		case "mode": return m.mode;
-		case "subject.version": return m.subject.version;
-		case "subject.definition_digest": return m.subject.definition_digest;
-		case "subject.source.commit": return m.subject.source.commit;
-		case "subject.source.dirty": return m.subject.source.dirty;
-		case "prompts": return Object.fromEntries(m.prompts.map((p) => [p.step, p.digest]));
-		case "model.provider": return m.model.provider;
-		case "model.id": return m.model.id;
-		case "model.configuration": return m.model.configuration;
-		case "model.recordings_digest": return m.model.recordings_digest;
-	}
-}
+/** What must be identical before two runs are compared at all. EVL-001.7.1. */
+const IDENTITY: [string, (m: Manifest) => unknown][] = [
+	["standard", (m) => m.standard],
+	["mode", (m) => m.mode],
+	["subject", (m) => [m.subject.kind, m.subject.id, m.subject.source.repository]],
+	["dataset.digest", (m) => m.dataset.digest],
+	["dataset.cases", (m) => m.dataset.cases],
+	["scorers", (m) => m.scorers.map((s) => [s.id, s.version]).sort((a, b) => (canonicalize(a) < canonicalize(b) ? -1 : 1))],
+];
 
 export type Transition = "pass→pass" | "fail→fail" | "fixed" | "regressed" | "not-compared";
 
@@ -55,7 +48,7 @@ export interface CaseComparison {
 }
 
 export interface ComparisonReport {
-	/** False when the runs measured different things; nothing below is meaningful then. */
+	/** False when the runs measured different things; then there are no cases and no tally. */
 	comparable: boolean;
 	reasons: string[];
 	baseline: { run: string; mode: Mode; status: string };
@@ -89,20 +82,17 @@ function transitionOf(a: CaseStatus | "missing", b: CaseStatus | "missing"): Tra
 	return "not-compared";
 }
 
-const scorerSet = (m: Manifest) => m.scorers.map((s) => `${s.id}@${s.version}`).sort().join(",");
-
-/** Compare two already-validated manifests. EVL-001.7. */
+/** Compare two manifests that have already passed validation. EVL-001.7. */
 export function compareManifests(baseline: Manifest, candidate: Manifest): ComparisonReport {
-	const reasons: string[] = [];
-	if (baseline.standard !== candidate.standard) reasons.push(`standards differ: ${baseline.standard} vs ${candidate.standard}`);
-	if (baseline.dataset.digest !== candidate.dataset.digest) {
-		reasons.push(`dataset digests differ: ${baseline.dataset.id}@${baseline.dataset.revision} vs ${candidate.dataset.id}@${candidate.dataset.revision}`);
-	}
-	if (scorerSet(baseline) !== scorerSet(candidate)) reasons.push(`scorer sets differ: [${scorerSet(baseline)}] vs [${scorerSet(candidate)}]`);
+	const reasons = IDENTITY.flatMap(([name, get]) => {
+		const a = canonicalize(get(baseline));
+		const b = canonicalize(get(candidate));
+		return a === b ? [] : [`${name} differs: ${a} vs ${b}`];
+	});
 
-	const changes = PROVENANCE_FIELDS.flatMap((field) => {
-		const a = provenance(baseline, field);
-		const b = provenance(candidate, field);
+	const changes = (Object.keys(PROVENANCE) as ProvenanceField[]).flatMap((field) => {
+		const a = PROVENANCE[field](baseline);
+		const b = PROVENANCE[field](candidate);
 		return canonicalize(a) === canonicalize(b) ? [] : [{ field, baseline: a, candidate: b }];
 	});
 	const declared = candidate.change;

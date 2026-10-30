@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFile, readdir, symlink, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { canonicalDigest, canonicalize, compareManifests, validateManifest, type Manifest } from "./index.ts";
-import { readManifest, updateBundle, validateBundle, writeBundle, type ManifestInput } from "./node.ts";
+import { canonicalDigest, canonicalize, compareManifests, MAX_MANIFEST_BYTES, STANDARD, validateBundleFiles, validateManifest, type Manifest } from "./index.ts";
+import { addArtifacts, createBundle, finalizeBundle, readManifest, validateBundle, writeBundle, type ManifestInput } from "./node.ts";
 import { fixture, tempRoot } from "./test-fixture.ts";
 import { canonicalize as serverCanonicalize } from "../../server/src/canonical.ts";
 
@@ -81,10 +81,9 @@ describe("validation", () => {
 	test("a recorded-mode manifest that names a provider fails", async () => {
 		// THIS TEST VALIDATES A HARD REQUIREMENT (EVL-001.3.2)
 		// YOU MUST NOT MODIFY THIS TEST UNLESS THE REQUIREMENT CHANGES
-		const { manifest } = await written((m) => {
-			m.model.provider = "openai";
-			m.model.id = "gpt-x";
-		});
+		const { manifest } = await written();
+		manifest.model.provider = "openai";
+		manifest.model.id = "gpt-x";
 		expect(validateManifest(manifest)).toEqual([
 			{ file: "manifest.json", field: "model.provider", message: "must be null in recorded mode" },
 			{ file: "manifest.json", field: "model.id", message: "must be null in recorded mode" },
@@ -94,10 +93,9 @@ describe("validation", () => {
 	test("a real-model manifest without a provider fails", async () => {
 		// THIS TEST VALIDATES A HARD REQUIREMENT (EVL-001.3.3)
 		// YOU MUST NOT MODIFY THIS TEST UNLESS THE REQUIREMENT CHANGES
-		const { manifest } = await written((m) => {
-			m.mode = "real-model";
-			m.model = { kind: "provider", provider: null, id: "gpt-x", configuration: {}, recordings_digest: null };
-		});
+		const { manifest } = await written();
+		manifest.mode = "real-model";
+		manifest.model = { kind: "provider", provider: null, id: "gpt-x", configuration: {}, recordings_digest: null };
 		expect(validateManifest(manifest)).toEqual([
 			{ file: "manifest.json", field: "model.provider", message: "is required in real-model mode" },
 		]);
@@ -181,6 +179,112 @@ describe("validation", () => {
 	});
 });
 
+describe("manifest rules", () => {
+	const base = async () => (await written()).manifest;
+	const fields = (m: unknown) => validateManifest(m).map((i) => `${i.field}: ${i.message}`);
+
+	test("case status follows from its checks", async () => {
+		// THIS TEST VALIDATES A HARD REQUIREMENT (EVL-001.4.4)
+		// YOU MUST NOT MODIFY THIS TEST UNLESS THE REQUIREMENT CHANGES
+		const m = await base();
+		const failWithoutFailure = structuredClone(m);
+		failWithoutFailure.results[1]!.checks[0]!.status = "pending";
+		expect(fields(failWithoutFailure)).toEqual(["results[1].status: is fail but no check failed"]);
+
+		const errorCheckNotError = structuredClone(m);
+		errorCheckNotError.results[1]!.checks[0]!.status = "error";
+		expect(fields(errorCheckNotError)).toEqual([
+			"results[1].status: is fail but no check failed",
+			"results[1].status: is fail but a check errored and none failed; expected error",
+		]);
+
+		const errorWithoutError = structuredClone(m);
+		errorWithoutError.results[1]!.status = "error";
+		errorWithoutError.summary = { cases: 2, pass: 1, fail: 0, error: 1, skipped: 0 };
+		expect(fields(errorWithoutError)).toEqual(["results[1].status: is error but no check errored"]);
+	});
+
+	test("each result has exactly one check per declared scorer", async () => {
+		// THIS TEST VALIDATES A HARD REQUIREMENT (EVL-001.2.6)
+		// YOU MUST NOT MODIFY THIS TEST UNLESS THE REQUIREMENT CHANGES
+		const m = await base();
+		m.results[0]!.checks.pop();
+		m.results[1]!.checks.push({ scorer: "consent-grants-no-access", status: "not-applicable" });
+		expect(fields(m)).toEqual([
+			"results[0].checks: has 0 checks for scorer no-unrequested-writes; expected exactly 1",
+			"results[1].checks: has 2 checks for scorer consent-grants-no-access; expected exactly 1",
+		]);
+	});
+
+	test("malformed manifests yield issues, never exceptions", async () => {
+		// THIS TEST VALIDATES A HARD REQUIREMENT (EVL-001.8.3)
+		// YOU MUST NOT MODIFY THIS TEST UNLESS THE REQUIREMENT CHANGES
+		let deep: unknown = 1;
+		for (let i = 0; i < 100_000; i++) deep = [deep];
+		const cyclic: Record<string, unknown> = {};
+		cyclic.self = cyclic;
+		for (const value of [null, [], "x", 1, Number.NaN, { standard: STANDARD, run: Number.POSITIVE_INFINITY }, deep, cyclic, { standard: STANDARD, run: [], results: "x", artifacts: [null, 1] }]) {
+			expect(validateManifest(value).length).toBeGreaterThan(0);
+		}
+		const hostile = ["null", "[]", '{"standard":"pensieve.evaluation/v0","run":1e999}', "[".repeat(50_000) + "]".repeat(50_000), `{"standard":"pensieve.evaluation/v0","x":"${"a".repeat(MAX_MANIFEST_BYTES)}"}`];
+		for (const text of hostile) {
+			const report = await validateBundleFiles({ files: new Map([["manifest.json", new TextEncoder().encode(text)]]) });
+			expect(report.valid).toBe(false);
+		}
+	});
+
+	test("manifest.json is byte-identical to its canonical encoding", async () => {
+		// THIS TEST VALIDATES A HARD REQUIREMENT (EVL-001.1.2)
+		// YOU MUST NOT MODIFY THIS TEST UNLESS THE REQUIREMENT CHANGES
+		const { dir } = await written();
+		const bytes = await readFile(join(dir, "manifest.json"));
+		await writeFile(join(dir, "manifest.json"), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), bytes]));
+		expect((await validateBundle(dir)).issues).toEqual([{ file: "manifest.json", message: "is not canonical JSON" }]);
+	});
+
+	test("unknown fields, loose timestamps, time travel, and duplicate prompt steps are invalid", async () => {
+		// THIS TEST VALIDATES A HARD REQUIREMENT (EVL-001.1.6, EVL-001.1.7)
+		// YOU MUST NOT MODIFY THIS TEST UNLESS THE REQUIREMENT CHANGES
+		const m = (await base()) as unknown as Record<string, any>;
+		m.extra = true;
+		m.model.temperature = 0;
+		m.run.started_at = "2026-10-30 15:00";
+		expect(fields(m)).toEqual([
+			"extra: is not a known field",
+			"run.started_at: must be an ISO-8601 date-time with an offset, like 2026-10-30T15:00:00Z",
+			"model.temperature: is not a known field",
+		]);
+
+		const late = await base();
+		late.run.ended_at = "2026-10-30T14:00:00Z";
+		expect(fields(late)).toEqual(["run.ended_at: is before run.started_at"]);
+
+		const twice = await base();
+		twice.prompts.push({ ...twice.prompts[0]! });
+		expect(fields(twice)).toEqual(["prompts[1].step: duplicate prompt step scan"]);
+	});
+
+	test("the publication profile rejects secret-like fields and credential-shaped paths", async () => {
+		// THIS TEST VALIDATES A HARD REQUIREMENT (EVL-001.6.4, EVL-001.6.2)
+		// YOU MUST NOT MODIFY THIS TEST UNLESS THE REQUIREMENT CHANGES
+		const { manifest, files } = await fixture();
+		files["cases/declined/trace.json"] = { operations: [{ op: "connector.read", request: { headers: { Authorization: "opaque-value" }, Api_Key: "x" } }] };
+		files["cases/declined/ghp_abcdefghijklmnopqrstuvwxyz0123456789.txt"] = "";
+		manifest.results[0]!.artifacts.push("cases/declined/ghp_abcdefghijklmnopqrstuvwxyz0123456789.txt");
+		const dir = join(await tempRoot(), manifest.run.id);
+		await writeBundle(dir, { manifest, files });
+		const report = await validateBundle(dir, { publication: true });
+		expect(report.issues.map((i) => `${i.file} ${i.field ?? ""}`).sort()).toEqual([
+			"cases/declined/ghp_abcdefghijklmnopqrstuvwxyz0123456789.txt ", // the path itself
+			"cases/declined/trace.json operations[0].request.Api_Key",
+			"cases/declined/trace.json operations[0].request.headers.Authorization",
+			"manifest.json ", // which lists that path
+		]);
+		// maxOutputTokens in model.configuration is not a secret.
+		expect(report.issues.some((i) => i.field?.includes("maxOutputTokens"))).toBe(false);
+	});
+});
+
 describe("writing", () => {
 	test("writing the same inputs twice gives byte-identical files", async () => {
 		// THIS TEST VALIDATES A HARD REQUIREMENT (EVL-001.1.5)
@@ -204,29 +308,67 @@ describe("writing", () => {
 		await expect(writeBundle(dir, { manifest, files })).rejects.toThrow("already exists");
 	});
 
-	test("a running bundle grows and is finalized without rewriting artifacts", async () => {
+	test("a running bundle grows and is finalized once, without rewriting artifacts", async () => {
 		// THIS TEST VALIDATES A HARD REQUIREMENT (EVL-001.4.6)
 		// YOU MUST NOT MODIFY THIS TEST UNLESS THE REQUIREMENT CHANGES
 		const { manifest, files } = await fixture();
-		const results = manifest.results;
+		const { results, gaps } = manifest;
 		const dir = join(await tempRoot(), manifest.run.id);
-		const { "report.md": report, ...early } = files;
-		await writeBundle(dir, { manifest: { ...manifest, run: { ...manifest.run, status: "running", ended_at: null }, results: [] }, files: early });
+		const { "report.md": report, "prompts/scan.txt": prompt, ...cases } = files;
+		await createBundle(dir, { manifest: { ...manifest, run: { ...manifest.run, status: "running", ended_at: null }, results: [] }, files: { "prompts/scan.txt": prompt! } });
 		expect(await validateBundle(dir)).toMatchObject({ valid: true, status: "running" });
 
-		await expect(updateBundle(dir, { files: { "prompts/scan.txt": "changed" } })).rejects.toThrow();
-		await updateBundle(dir, { manifest: { run: { status: "complete", ended_at: "2026-10-30T15:02:00Z" }, results }, files: { "report.md": report! } });
-		const final = await validateBundle(dir);
-		expect(final).toMatchObject({ valid: true, status: "complete", issues: [] });
-		await expect(updateBundle(dir, { files: { "late.txt": "x" } })).rejects.toThrow("only a running bundle");
+		await addArtifacts(dir, cases);
+		await expect(addArtifacts(dir, { "prompts/scan.txt": "changed" })).rejects.toThrow("never rewritten");
+		await finalizeBundle(dir, { status: "complete", ended_at: "2026-10-30T15:02:00Z", results, gaps, files: { "report.md": report! } });
+		expect(await validateBundle(dir)).toMatchObject({ valid: true, status: "complete", issues: [] });
+		expect(await readdir(dir)).not.toContainEqual(expect.stringContaining(".tmp"));
+
+		await expect(finalizeBundle(dir, { status: "failed", ended_at: null, results: [], gaps: [] })).rejects.toThrow("only a running bundle");
+		await expect(addArtifacts(dir, { "late.txt": "x" })).rejects.toThrow("only a running bundle");
+	});
+
+	test("an invalid manifest is refused before anything is written", async () => {
+		// THIS TEST VALIDATES A HARD REQUIREMENT (EVL-001.4.8)
+		// YOU MUST NOT MODIFY THIS TEST UNLESS THE REQUIREMENT CHANGES
+		const { manifest, files } = await fixture();
+		const dir = join(await tempRoot(), manifest.run.id);
+		const running = { ...manifest, run: { ...manifest.run, status: "running" as const, ended_at: null }, results: [] };
+		await expect(createBundle(dir, { manifest: { ...running, mode: "real-model" }, files })).rejects.toThrow("model.provider");
+		expect(await stat(dir).catch(() => null)).toBeNull();
+
+		await createBundle(dir, { manifest: running, files });
+		const before = await readFile(join(dir, "manifest.json"));
+		const bad = structuredClone(manifest.results);
+		bad[0]!.case = "not-a-case";
+		await expect(finalizeBundle(dir, { status: "complete", ended_at: "2026-10-30T15:02:00Z", results: bad, gaps: [] })).rejects.toThrow("not in dataset.cases");
+		expect(Buffer.compare(await readFile(join(dir, "manifest.json")), before)).toBe(0);
+	});
+
+	test("writing through a symlink inside the bundle is refused", async () => {
+		// THIS TEST VALIDATES A HARD REQUIREMENT (EVL-001.2.3)
+		// YOU MUST NOT MODIFY THIS TEST UNLESS THE REQUIREMENT CHANGES
+		const { manifest } = await fixture();
+		const root = await tempRoot();
+		const dir = join(root, manifest.run.id);
+		await createBundle(dir, { manifest: { ...manifest, run: { ...manifest.run, status: "running", ended_at: null }, results: [] }, files: { "prompts/scan.txt": (await fixture()).files["prompts/scan.txt"]! } });
+		await mkdir(join(root, "elsewhere"));
+		await symlink(join(root, "elsewhere"), join(dir, "cases"));
+		await expect(addArtifacts(dir, { "cases/declined/input.json": {} })).rejects.toThrow("symbolic link");
+		expect(await readdir(join(root, "elsewhere"))).toEqual([]);
 	});
 });
 
 describe("comparison", () => {
-	async function pair(change: (m: ManifestInput) => void) {
-		const base = await written(() => {}, "base-run");
-		const cand = await written(change, "candidate-run");
-		return compareManifests(base.manifest, cand.manifest);
+	let baseline: Promise<Manifest> | undefined;
+	/** The baseline is written and valid; the candidate is a changed copy of it. */
+	async function pair(change: (m: Manifest) => void) {
+		baseline ??= written(() => {}, "base-run").then((w) => w.manifest);
+		const base = await baseline;
+		const cand = structuredClone(base);
+		cand.run.id = "candidate-run";
+		change(cand);
+		return compareManifests(base, cand);
 	}
 
 	test("different dataset digests or scorer versions are not comparable", async () => {
@@ -237,7 +379,27 @@ describe("comparison", () => {
 		expect(dataset.cases).toEqual([]);
 		const scorer = await pair((m) => (m.scorers[0]!.version = "2"));
 		expect(scorer.comparable).toBe(false);
-		expect(scorer.reasons[0]).toContain("scorer sets differ");
+		expect(scorer.reasons[0]).toContain("scorers differ");
+	});
+
+	test("different modes, subjects, or case lists are not comparable", async () => {
+		// THIS TEST VALIDATES A HARD REQUIREMENT (EVL-001.7.1)
+		// YOU MUST NOT MODIFY THIS TEST UNLESS THE REQUIREMENT CHANGES
+		const mode = await pair((m) => {
+			m.mode = "real-model";
+			m.model = { kind: "provider", provider: "openai", id: "gpt-x", configuration: {}, recordings_digest: null };
+		});
+		expect(mode).toMatchObject({ comparable: false, cases: [], tally: { not_compared: 0, fixed: 0, regressed: 0 } });
+		expect(mode.reasons[0]).toStartWith("mode differs");
+		expect((await pair((m) => (m.subject.id = "other-workflow"))).reasons[0]).toStartWith("subject differs");
+		expect((await pair((m) => (m.subject.source.repository = "ai-outfitter/other"))).comparable).toBe(false);
+		const reordered = await pair((m) => m.dataset.cases.reverse());
+		expect(reordered.reasons).toEqual(['dataset.cases differs: ["declined","partial-sources"] vs ["partial-sources","declined"]']);
+	});
+
+	test("source paths are reported as provenance", async () => {
+		const report = await pair((m) => m.subject.source.paths.push("catalog/workflows/forerunner-setup/evals/cases/1"));
+		expect(report.undeclared).toEqual(["subject.source.paths"]);
 	});
 
 	test("declared and actual changes are both reported, and extra changes are flagged", async () => {
@@ -277,7 +439,7 @@ describe("comparison", () => {
 		const report = await pair((m) => {
 			m.run.status = "failed";
 			m.results[0]!.status = "error";
-			m.results[0]!.checks = [{ scorer: "consent-grants-no-access", status: "error", reason: "timeout" }];
+			m.results[0]!.checks[0] = { scorer: "consent-grants-no-access", status: "error", reason: "timeout" };
 			m.results.pop();
 		});
 		expect(report.comparable).toBe(true);
@@ -357,6 +519,8 @@ describe("cli", () => {
 		expect(invalid.status).toBe(1);
 		expect(JSON.parse(invalid.stdout)[0].issues).toEqual([{ file: "stray.txt", message: "not listed in manifest.artifacts" }]);
 		expect(cli("nonsense").status).toBe(2);
+		expect(cli("validate", base.dir, "--publicaton").status).toBe(2);
+		expect(cli("compare", base.dir, cand.dir, "--publication").status).toBe(2);
 	});
 });
 

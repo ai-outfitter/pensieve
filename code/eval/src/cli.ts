@@ -35,9 +35,16 @@ async function requireValid(dirs: string[]): Promise<boolean> {
 }
 
 export async function main(argv: string[]): Promise<number> {
-	const json = argv.includes("--json");
-	const publication = argv.includes("--publication");
-	const [command, ...args] = argv.filter((a) => !a.startsWith("--"));
+	const flags = argv.filter((a) => a.startsWith("-"));
+	const [command, ...args] = argv.filter((a) => !a.startsWith("-"));
+	const allowed = command === "validate" ? ["--json", "--publication"] : ["--json"];
+	const unknown = flags.filter((f) => !allowed.includes(f));
+	if (unknown.length > 0) {
+		console.error(`unknown option ${unknown.join(", ")} for ${command ?? "(no command)"}\n${USAGE}`);
+		return 2;
+	}
+	const json = flags.includes("--json");
+	const publication = flags.includes("--publication");
 
 	if (command === "validate" && args.length > 0) {
 		let ok = true;

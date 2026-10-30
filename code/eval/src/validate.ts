@@ -1,5 +1,5 @@
 import { canonicalize, sha256Hex } from "./canonical.ts";
-import { findCredentials } from "./publication.ts";
+import { findCredentials, findSecretKeys } from "./publication.ts";
 import {
 	CASE_STATUSES,
 	CHANGE_VARIABLES,
@@ -12,15 +12,36 @@ import {
 	SCORER_KINDS,
 	STANDARD,
 	type Issue,
-	type Manifest,
 	type ValidationReport,
 } from "./types.ts";
 
 const HEX64 = /^[0-9a-f]{64}$/;
 const HEX40 = /^[0-9a-f]{40}$/;
+const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+/** Strict ISO-8601 date-time with an explicit offset. */
+const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/** Limits that keep validation bounded on hostile input. EVL-001.8.3. */
+export const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
+export const MAX_DEPTH = 32;
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** Why `value` is not plain, bounded JSON, or null when it is. */
+function jsonProblem(value: unknown, depth = 0): string | null {
+	if (depth > MAX_DEPTH) return `nests deeper than ${MAX_DEPTH} levels`;
+	if (value === null || typeof value === "string" || typeof value === "boolean") return null;
+	if (typeof value === "number") return Number.isFinite(value) ? null : "contains a non-finite number";
+	if (Array.isArray(value) || isObj(value)) {
+		for (const member of Object.values(value)) {
+			const problem = jsonProblem(member, depth + 1);
+			if (problem) return problem;
+		}
+		return null;
+	}
+	return `contains a ${typeof value}, which is not JSON`;
+}
 
 /** Hand-written schema walker. Each helper records an issue and returns whether the value is usable. */
 class Checker {
@@ -34,8 +55,13 @@ class Checker {
 		this.issues.push({ file: this.file, field, message });
 		return false;
 	}
-	obj(v: unknown, field: string): v is Obj {
-		return isObj(v) || this.fail(field, "must be an object");
+	/** An object with exactly the known keys. EVL-001.1.6. */
+	obj(v: unknown, field: string, keys: readonly string[], optional: readonly string[] = []): v is Obj {
+		if (!isObj(v)) return this.fail(field, "must be an object");
+		for (const key of Object.keys(v)) {
+			if (!keys.includes(key) && !optional.includes(key)) this.fail(field ? `${field}.${key}` : key, "is not a known field");
+		}
+		return true;
 	}
 	arr(v: unknown, field: string): v is unknown[] {
 		return Array.isArray(v) || this.fail(field, "must be an array");
@@ -46,7 +72,9 @@ class Checker {
 		return true;
 	}
 	strOrNull(v: unknown, field: string, pattern?: RegExp): boolean {
-		return v === null || this.str(v, field, pattern);
+		if (v === null) return true;
+		if (typeof v !== "string") return this.fail(field, "must be a string or null");
+		return this.str(v, field, pattern);
 	}
 	oneOf<T extends string>(v: unknown, field: string, values: readonly T[]): v is T {
 		return (typeof v === "string" && (values as readonly string[]).includes(v)) ||
@@ -58,12 +86,20 @@ class Checker {
 	bool(v: unknown, field: string): v is boolean {
 		return typeof v === "boolean" || this.fail(field, "must be a boolean");
 	}
-	date(v: unknown, field: string): boolean {
-		return (this.str(v, field) && !Number.isNaN(Date.parse(v))) || this.fail(field, "must be an ISO-8601 time");
+	time(v: unknown, field: string): v is string {
+		return (typeof v === "string" && TIMESTAMP.test(v) && !Number.isNaN(Date.parse(v))) ||
+			this.fail(field, "must be an ISO-8601 date-time with an offset, like 2026-10-30T15:00:00Z");
 	}
 	strings(v: unknown, field: string): v is string[] {
 		if (!this.arr(v, field)) return false;
 		return v.every((s, i) => this.str(s, `${field}[${i}]`));
+	}
+	/** A list of objects; `each` runs on every member that is an object with known keys. */
+	list(v: unknown, field: string, keys: readonly string[], each: (o: Obj, f: string) => void, optional: readonly string[] = []): void {
+		if (!this.arr(v, field)) return;
+		v.forEach((item, i) => {
+			if (this.obj(item, `${field}[${i}]`, keys, optional)) each(item, `${field}[${i}]`);
+		});
 	}
 }
 
@@ -73,14 +109,33 @@ export function isSafePath(path: string): boolean {
 	return path.split("/").every((seg) => seg !== "" && seg !== "." && seg !== "..");
 }
 
+const KEYS = {
+	manifest: ["standard", "run", "mode", "subject", "dataset", "scorers", "model", "prompts", "change", "results", "gaps", "summary", "artifacts"],
+	run: ["id", "attempt", "status", "started_at", "ended_at", "previous", "regrade_of"],
+	subject: ["kind", "id", "version", "definition_digest", "source"],
+	source: ["repository", "commit", "dirty", "paths"],
+	dataset: ["id", "revision", "digest", "cases"],
+	scorer: ["id", "version", "kind"],
+	model: ["kind", "provider", "id", "configuration", "recordings_digest"],
+	prompt: ["step", "digest", "path"],
+	change: ["variable", "baseline", "description"],
+	result: ["case", "status", "checks", "artifacts"],
+	check: ["scorer", "status"],
+	gap: ["case", "class", "reason"],
+	summary: ["cases", "pass", "fail", "error", "skipped"],
+	artifact: ["path", "digest", "size", "media_type"],
+} as const;
+
 /**
- * Validate a parsed manifest against the schema and its own internal
- * consistency (EVL-001.1–4). It does not look at artifact bytes; see
- * `validateBundleFiles` for that.
+ * Validate a manifest value against the schema and its own internal
+ * consistency (EVL-001.1–4). Never throws: any input, however malformed,
+ * yields issues. It does not look at artifact bytes; see `validateBundleFiles`.
  */
 export function validateManifest(value: unknown): Issue[] {
 	const c = new Checker(MANIFEST_FILE);
-	if (!c.obj(value, "")) return c.issues;
+	const problem = jsonProblem(value);
+	if (problem) return [{ file: MANIFEST_FILE, message: problem }];
+	if (!c.obj(value, "", KEYS.manifest)) return c.issues;
 	const m = value;
 
 	// EVL-001.1.3: never guess at an unknown standard.
@@ -90,43 +145,47 @@ export function validateManifest(value: unknown): Issue[] {
 	}
 
 	const run = m.run;
-	if (c.obj(run, "run")) {
-		c.str(run.id, "run.id", /^[A-Za-z0-9][A-Za-z0-9._-]*$/);
+	if (c.obj(run, "run", KEYS.run)) {
+		c.str(run.id, "run.id", RUN_ID);
 		c.int(run.attempt, "run.attempt", 1);
 		c.oneOf(run.status, "run.status", RUN_STATUSES);
-		c.date(run.started_at, "run.started_at");
-		if (run.ended_at !== null) c.date(run.ended_at, "run.ended_at");
+		const started = c.time(run.started_at, "run.started_at");
+		if (run.ended_at !== null && c.time(run.ended_at, "run.ended_at") && started && Date.parse(run.ended_at) < Date.parse(run.started_at as string)) {
+			c.fail("run.ended_at", "is before run.started_at");
+		}
 		for (const key of ["previous", "regrade_of"] as const) {
-			c.strOrNull(run[key], `run.${key}`);
+			c.strOrNull(run[key], `run.${key}`, RUN_ID);
 			if (run[key] !== null && run[key] === run.id) c.fail(`run.${key}`, "must not refer to the run itself");
 		}
+		// EVL-001.4.2: status consistency that needs only the run.
+		if (run.status === "complete" && run.ended_at === null) c.fail("run.ended_at", "is required when status is complete");
+		if (run.status === "running" && run.ended_at !== null) c.fail("run.ended_at", "must be null while running");
 	}
 
 	c.oneOf(m.mode, "mode", MODES);
 
-	const subject = m.subject;
-	if (c.obj(subject, "subject")) {
-		c.str(subject.kind, "subject.kind");
-		c.str(subject.id, "subject.id");
-		c.str(subject.version, "subject.version");
-		c.str(subject.definition_digest, "subject.definition_digest", HEX64);
-		const src = subject.source;
-		if (c.obj(src, "subject.source")) {
-			c.str(src.repository, "subject.source.repository");
-			c.str(src.commit, "subject.source.commit", HEX40);
-			c.bool(src.dirty, "subject.source.dirty");
-			c.strings(src.paths, "subject.source.paths");
+	if (c.obj(m.subject, "subject", KEYS.subject)) {
+		const s = m.subject;
+		c.str(s.kind, "subject.kind");
+		c.str(s.id, "subject.id");
+		c.str(s.version, "subject.version");
+		c.str(s.definition_digest, "subject.definition_digest", HEX64);
+		if (c.obj(s.source, "subject.source", KEYS.source)) {
+			c.str(s.source.repository, "subject.source.repository");
+			c.str(s.source.commit, "subject.source.commit", HEX40);
+			c.bool(s.source.dirty, "subject.source.dirty");
+			c.strings(s.source.paths, "subject.source.paths");
 		}
 	}
 
 	const cases = new Set<string>();
-	const dataset = m.dataset;
-	if (c.obj(dataset, "dataset")) {
-		c.str(dataset.id, "dataset.id");
-		c.str(dataset.revision, "dataset.revision");
-		c.str(dataset.digest, "dataset.digest", HEX64);
-		if (c.strings(dataset.cases, "dataset.cases")) {
-			for (const id of dataset.cases) {
+	if (c.obj(m.dataset, "dataset", KEYS.dataset)) {
+		const d = m.dataset;
+		c.str(d.id, "dataset.id");
+		c.str(d.revision, "dataset.revision");
+		c.str(d.digest, "dataset.digest", HEX64);
+		if (c.strings(d.cases, "dataset.cases")) {
+			for (const id of d.cases) {
 				if (cases.has(id)) c.fail("dataset.cases", `duplicate case ${id}`);
 				cases.add(id);
 			}
@@ -134,24 +193,20 @@ export function validateManifest(value: unknown): Issue[] {
 	}
 
 	const scorers = new Set<string>();
-	if (c.arr(m.scorers, "scorers")) {
-		m.scorers.forEach((s, i) => {
-			const f = `scorers[${i}]`;
-			if (!c.obj(s, f)) return;
-			c.str(s.version, `${f}.version`);
-			c.oneOf(s.kind, `${f}.kind`, SCORER_KINDS);
-			if (!c.str(s.id, `${f}.id`)) return;
-			if (scorers.has(s.id)) c.fail(`${f}.id`, `duplicate scorer ${s.id}`);
-			scorers.add(s.id);
-		});
-	}
+	c.list(m.scorers, "scorers", KEYS.scorer, (s, f) => {
+		c.str(s.version, `${f}.version`);
+		c.oneOf(s.kind, `${f}.kind`, SCORER_KINDS);
+		if (!c.str(s.id, `${f}.id`)) return;
+		if (scorers.has(s.id)) c.fail(`${f}.id`, `duplicate scorer ${s.id}`);
+		scorers.add(s.id);
+	});
 
-	const model = m.model;
-	if (c.obj(model, "model")) {
+	if (c.obj(m.model, "model", KEYS.model)) {
+		const model = m.model;
 		c.oneOf(model.kind, "model.kind", MODEL_KINDS);
 		c.strOrNull(model.provider, "model.provider");
 		c.strOrNull(model.id, "model.id");
-		c.obj(model.configuration, "model.configuration");
+		if (!isObj(model.configuration)) c.fail("model.configuration", "must be an object");
 		c.strOrNull(model.recordings_digest, "model.recordings_digest", HEX64);
 
 		// EVL-001.3: the mode and the model description must agree, so a replay
@@ -170,103 +225,98 @@ export function validateManifest(value: unknown): Issue[] {
 	}
 
 	// Artifact list first: results and prompts are checked against it.
-	const artifacts = new Map<string, string>();
-	if (c.arr(m.artifacts, "artifacts")) {
-		m.artifacts.forEach((a, i) => {
-			const f = `artifacts[${i}]`;
-			if (!c.obj(a, f)) return;
-			c.str(a.digest, `${f}.digest`, HEX64);
-			c.int(a.size, `${f}.size`);
-			c.str(a.media_type, `${f}.media_type`);
-			if (!c.str(a.path, `${f}.path`)) return;
-			if (!isSafePath(a.path)) c.fail(`${f}.path`, `${a.path} escapes the bundle or is not a plain relative path`);
-			if (a.path === MANIFEST_FILE || a.path === RECEIPT_FILE) c.fail(`${f}.path`, `${a.path} must not be listed`);
-			if (artifacts.has(a.path)) c.fail(`${f}.path`, `duplicate artifact ${a.path}`);
-			artifacts.set(a.path, String(a.digest));
-		});
-	}
+	const artifacts = new Map<string, unknown>();
+	c.list(m.artifacts, "artifacts", KEYS.artifact, (a, f) => {
+		c.str(a.digest, `${f}.digest`, HEX64);
+		c.int(a.size, `${f}.size`);
+		c.str(a.media_type, `${f}.media_type`);
+		if (!c.str(a.path, `${f}.path`)) return;
+		if (!isSafePath(a.path)) c.fail(`${f}.path`, `${a.path} escapes the bundle or is not a plain relative path`);
+		if (a.path === MANIFEST_FILE || a.path === RECEIPT_FILE) c.fail(`${f}.path`, `${a.path} must not be listed`);
+		if (artifacts.has(a.path)) c.fail(`${f}.path`, `duplicate artifact ${a.path}`);
+		artifacts.set(a.path, a.digest);
+	});
 
-	if (c.arr(m.prompts, "prompts")) {
-		m.prompts.forEach((p, i) => {
-			const f = `prompts[${i}]`;
-			if (!c.obj(p, f)) return;
-			c.str(p.step, `${f}.step`);
-			c.str(p.digest, `${f}.digest`, HEX64);
-			if (!c.str(p.path, `${f}.path`)) return;
-			const listed = artifacts.get(p.path);
-			if (listed === undefined) c.fail(`${f}.path`, `${p.path} is not listed in artifacts`);
-			else if (listed !== p.digest) c.fail(`${f}.digest`, `does not match the digest of artifact ${p.path}`);
-		});
-	}
+	const steps = new Set<string>();
+	c.list(m.prompts, "prompts", KEYS.prompt, (p, f) => {
+		if (c.str(p.step, `${f}.step`)) {
+			if (steps.has(p.step)) c.fail(`${f}.step`, `duplicate prompt step ${p.step}`);
+			steps.add(p.step);
+		}
+		c.str(p.digest, `${f}.digest`, HEX64);
+		if (!c.str(p.path, `${f}.path`)) return;
+		if (!artifacts.has(p.path)) c.fail(`${f}.path`, `${p.path} is not listed in artifacts`);
+		else if (artifacts.get(p.path) !== p.digest) c.fail(`${f}.digest`, `does not match the digest of artifact ${p.path}`);
+	});
 
-	if (m.change !== null && c.obj(m.change, "change")) {
+	if (m.change !== null && c.obj(m.change, "change", KEYS.change)) {
 		c.oneOf(m.change.variable, "change.variable", CHANGE_VARIABLES);
-		c.str(m.change.baseline, "change.baseline");
+		c.str(m.change.baseline, "change.baseline", RUN_ID);
 		c.str(m.change.description, "change.description");
 	}
 
-	const counts = { pass: 0, fail: 0, error: 0, skipped: 0 };
+	const counts = { cases: 0, pass: 0, fail: 0, error: 0, skipped: 0 };
 	const resulted = new Set<string>();
-	if (c.arr(m.results, "results")) {
-		m.results.forEach((r, i) => {
-			const f = `results[${i}]`;
-			if (!c.obj(r, f)) return;
-			if (c.str(r.case, `${f}.case`)) {
-				if (!cases.has(r.case)) c.fail(`${f}.case`, `${r.case} is not in dataset.cases`);
-				if (resulted.has(r.case)) c.fail(`${f}.case`, `duplicate result for ${r.case}`);
-				resulted.add(r.case);
-			}
-			const status = c.oneOf(r.status, `${f}.status`, CASE_STATUSES) ? r.status : null;
-			if (status) counts[status]++;
-			if (c.strings(r.artifacts, `${f}.artifacts`)) {
-				r.artifacts.forEach((p, j) => {
-					if (!artifacts.has(p)) c.fail(`${f}.artifacts[${j}]`, `${p} is not listed in artifacts`);
-				});
-			}
-			if (!c.arr(r.checks, `${f}.checks`)) return;
-			const statuses: string[] = [];
-			r.checks.forEach((k, j) => {
-				const g = `${f}.checks[${j}]`;
-				if (!c.obj(k, g)) return;
-				if (c.str(k.scorer, `${g}.scorer`) && !scorers.has(k.scorer)) c.fail(`${g}.scorer`, `${k.scorer} is not in scorers`);
-				if (c.oneOf(k.status, `${g}.status`, CHECK_STATUSES)) statuses.push(k.status);
-				if (k.reason !== undefined && typeof k.reason !== "string") c.fail(`${g}.reason`, "must be a string");
+	if (c.arr(m.results, "results")) counts.cases = m.results.length;
+	c.list(m.results, "results", KEYS.result, (r, f) => {
+		if (c.str(r.case, `${f}.case`)) {
+			if (!cases.has(r.case)) c.fail(`${f}.case`, `${r.case} is not in dataset.cases`);
+			if (resulted.has(r.case)) c.fail(`${f}.case`, `duplicate result for ${r.case}`);
+			resulted.add(r.case);
+		}
+		const status = c.oneOf(r.status, `${f}.status`, CASE_STATUSES) ? r.status : null;
+		if (status) counts[status]++;
+		if (c.strings(r.artifacts, `${f}.artifacts`)) {
+			r.artifacts.forEach((p, j) => {
+				if (!artifacts.has(p)) c.fail(`${f}.artifacts[${j}]`, `${p} is not listed in artifacts`);
 			});
-			// EVL-001.4.4: a pass needs a passing check and nothing failed, errored, or pending.
-			if (status === "pass") {
-				const bad = statuses.find((s) => s === "fail" || s === "error" || s === "pending");
-				if (bad) c.fail(`${f}.status`, `is pass but a check is ${bad}`);
-				else if (!statuses.includes("pass")) c.fail(`${f}.status`, "is pass but no check passed");
+		}
+		const statuses: string[] = [];
+		const scored = new Map<string, number>();
+		c.list(r.checks, `${f}.checks`, KEYS.check, (k, g) => {
+			if (c.str(k.scorer, `${g}.scorer`)) {
+				if (!scorers.has(k.scorer)) c.fail(`${g}.scorer`, `${k.scorer} is not in scorers`);
+				scored.set(k.scorer, (scored.get(k.scorer) ?? 0) + 1);
 			}
-		});
-	}
+			if (c.oneOf(k.status, `${g}.status`, CHECK_STATUSES)) statuses.push(k.status);
+			if (k.reason !== undefined && typeof k.reason !== "string") c.fail(`${g}.reason`, "must be a string");
+		}, ["reason"]);
+		// EVL-001.2.6: exactly one check per declared scorer.
+		for (const id of scorers) {
+			const n = scored.get(id) ?? 0;
+			if (n !== 1) c.fail(`${f}.checks`, `has ${n} checks for scorer ${id}; expected exactly 1`);
+		}
+		// EVL-001.4.4: the case status follows from its checks.
+		const has = (s: string) => statuses.includes(s);
+		if (status === "pass") {
+			const bad = statuses.find((s) => s === "fail" || s === "error" || s === "pending");
+			if (bad) c.fail(`${f}.status`, `is pass but a check is ${bad}`);
+			else if (!has("pass")) c.fail(`${f}.status`, "is pass but no check passed");
+		}
+		if (status === "fail" && !has("fail")) c.fail(`${f}.status`, "is fail but no check failed");
+		if (status === "error" && !has("error")) c.fail(`${f}.status`, "is error but no check errored");
+		if (status !== "error" && status !== "pass" && has("error") && !has("fail")) {
+			c.fail(`${f}.status`, `is ${status} but a check errored and none failed; expected error`);
+		}
+	});
 
-	if (c.arr(m.gaps, "gaps")) {
-		m.gaps.forEach((g, i) => {
-			const f = `gaps[${i}]`;
-			if (!c.obj(g, f)) return;
-			if (g.case !== null && c.str(g.case, `${f}.case`) && !cases.has(g.case)) c.fail(`${f}.case`, `${g.case} is not in dataset.cases`);
-			c.str(g.class, `${f}.class`);
-			c.str(g.reason, `${f}.reason`);
-		});
-	}
+	c.list(m.gaps, "gaps", KEYS.gap, (g, f) => {
+		if (g.case !== null && c.str(g.case, `${f}.case`) && !cases.has(g.case)) c.fail(`${f}.case`, `${g.case} is not in dataset.cases`);
+		c.str(g.class, `${f}.class`);
+		c.str(g.reason, `${f}.reason`);
+	});
 
 	// EVL-001.4.3: the summary is derived, so it must agree with the results.
-	const summary = m.summary;
-	if (c.obj(summary, "summary") && Array.isArray(m.results)) {
-		const expected = { cases: m.results.length, ...counts };
-		for (const [key, n] of Object.entries(expected)) {
-			if (summary[key] !== n) c.fail(`summary.${key}`, `is ${JSON.stringify(summary[key])} but results give ${n}`);
+	if (c.obj(m.summary, "summary", KEYS.summary) && Array.isArray(m.results)) {
+		for (const [key, n] of Object.entries(counts)) {
+			const actual = m.summary[key];
+			if (actual !== n) c.fail(`summary.${key}`, `is ${JSON.stringify(actual) ?? "missing"} but results give ${n}`);
 		}
 	}
 
-	// EVL-001.4.2: status consistency.
-	if (isObj(run)) {
-		if (run.status === "complete") {
-			if (run.ended_at === null) c.fail("run.ended_at", "is required when status is complete");
-			for (const id of cases) if (!resulted.has(id)) c.fail("results", `complete run has no result for case ${id}`);
-		}
-		if (run.status === "running" && run.ended_at !== null) c.fail("run.ended_at", "must be null while running");
+	// EVL-001.4.2: a complete run has a result for every case.
+	if (isObj(run) && run.status === "complete") {
+		for (const id of cases) if (!resulted.has(id)) c.fail("results", `complete run has no result for case ${id}`);
 	}
 
 	return c.issues;
@@ -279,48 +329,77 @@ export interface BundleFiles {
 	issues?: Issue[];
 }
 
+const ENCODER = new TextEncoder();
 const DECODER = new TextDecoder("utf-8", { fatal: true });
+const LOOSE = new TextDecoder();
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+	return a.byteLength === b.byteLength && a.every((x, i) => x === b[i]);
+}
+
+function parseJson(bytes: Uint8Array): { value: unknown } | { error: string } {
+	try {
+		return { value: JSON.parse(DECODER.decode(bytes)) };
+	} catch (error) {
+		return { error: `not valid JSON: ${error instanceof Error ? error.message : String(error)}` };
+	}
+}
 
 /**
  * Validate a whole bundle held in memory (EVL-001.1–6). Pure: works on bytes,
  * so the same code validates a directory, a fetched archive, or an object store.
+ * Never throws on malformed content.
  */
 export async function validateBundleFiles(
 	bundle: BundleFiles,
 	options: { publication?: boolean } = {},
 ): Promise<ValidationReport> {
 	const issues: Issue[] = [...(bundle.issues ?? [])];
-	const report = (m?: Manifest): ValidationReport => ({
-		valid: issues.length === 0,
-		run: m?.run?.id ?? null,
-		mode: m?.mode ?? null,
-		status: m?.run?.status ?? null,
-		issues,
-	});
+	let manifest: Obj | null = null;
+	const report = (): ValidationReport => {
+		const run = isObj(manifest?.run) ? manifest.run : {};
+		const pick = <T extends string>(v: unknown, values: readonly T[]) => (values as readonly unknown[]).includes(v) ? (v as T) : null;
+		return {
+			valid: issues.length === 0,
+			run: typeof run.id === "string" ? run.id : null,
+			mode: pick(manifest?.mode, MODES),
+			status: pick(run.status, RUN_STATUSES),
+			issues,
+		};
+	};
 
 	const raw = bundle.files.get(MANIFEST_FILE);
 	if (!raw) {
 		issues.push({ file: MANIFEST_FILE, message: "missing" });
 		return report();
 	}
-	let manifest: Manifest;
-	try {
-		manifest = JSON.parse(DECODER.decode(raw));
-	} catch (error) {
-		issues.push({ file: MANIFEST_FILE, message: `not valid JSON: ${(error as Error).message}` });
+	if (raw.byteLength > MAX_MANIFEST_BYTES) {
+		issues.push({ file: MANIFEST_FILE, message: `is larger than ${MAX_MANIFEST_BYTES} bytes` });
 		return report();
 	}
-	// EVL-001.1.2: the manifest bytes are exactly its canonical form.
-	const canonical = canonicalize(manifest);
-	if (DECODER.decode(raw) !== canonical) issues.push({ file: MANIFEST_FILE, message: "is not canonical JSON" });
+	const parsed = parseJson(raw);
+	if ("error" in parsed) {
+		issues.push({ file: MANIFEST_FILE, message: parsed.error });
+		return report();
+	}
+	const manifestIssues = validateManifest(parsed.value);
+	issues.push(...manifestIssues);
+	// Past the shape and bounds checks the value is a bounded JSON object, so
+	// canonicalize cannot throw on it.
+	if (!isObj(parsed.value) || parsed.value.standard !== STANDARD || jsonProblem(parsed.value)) return report();
+	manifest = parsed.value;
 
-	issues.push(...validateManifest(manifest));
-	const listed = new Map<string, Manifest["artifacts"][number]>();
-	if (Array.isArray(manifest.artifacts)) for (const a of manifest.artifacts) if (isObj(a) && typeof a.path === "string") listed.set(a.path, a);
+	// EVL-001.1.2: the manifest bytes are exactly its canonical form (no BOM, no whitespace).
+	const canonical = ENCODER.encode(canonicalize(manifest));
+	if (!sameBytes(raw, canonical)) issues.push({ file: MANIFEST_FILE, message: "is not canonical JSON" });
+
+	const listed = new Map<string, Obj>();
+	if (Array.isArray(manifest.artifacts)) {
+		for (const a of manifest.artifacts) if (isObj(a) && typeof a.path === "string" && isSafePath(a.path)) listed.set(a.path, a);
+	}
 
 	// EVL-001.2.1: every listed artifact present with matching size and digest.
 	for (const [path, artifact] of listed) {
-		if (!isSafePath(path)) continue; // already reported
 		const bytes = bundle.files.get(path);
 		if (!bytes) {
 			issues.push({ file: path, message: "listed in manifest.artifacts but missing" });
@@ -339,29 +418,29 @@ export async function validateBundleFiles(
 	// EVL-001.5.1: an optional receipt must name this exact manifest.
 	const receipt = bundle.files.get(RECEIPT_FILE);
 	if (receipt) {
-		try {
-			const parsed = JSON.parse(DECODER.decode(receipt));
-			if (!isObj(parsed) || !Array.isArray(parsed.statements)) issues.push({ file: RECEIPT_FILE, field: "statements", message: "must be an array" });
-			const digest = await sha256Hex(canonical);
-			if (!isObj(parsed) || parsed.manifest_digest !== digest) {
-				issues.push({ file: RECEIPT_FILE, field: "manifest_digest", message: `does not match the canonical manifest digest ${digest}` });
-			}
-		} catch (error) {
-			issues.push({ file: RECEIPT_FILE, message: `not valid JSON: ${(error as Error).message}` });
+		const r = parseJson(receipt);
+		const digest = await sha256Hex(canonical);
+		if ("error" in r) issues.push({ file: RECEIPT_FILE, message: r.error });
+		else if (!isObj(r.value) || r.value.manifest_digest !== digest) {
+			issues.push({ file: RECEIPT_FILE, field: "manifest_digest", message: `does not match the canonical manifest digest ${digest}` });
 		}
 	}
 
 	// EVL-001.6: publication profile.
 	if (options.publication) {
-		if (manifest.subject?.source?.dirty !== false) {
-			issues.push({ file: MANIFEST_FILE, field: "subject.source.dirty", message: "must be false for publication" });
-		}
+		const source = isObj(manifest.subject) && isObj(manifest.subject.source) ? manifest.subject.source : {};
+		if (source.dirty !== false) issues.push({ file: MANIFEST_FILE, field: "subject.source.dirty", message: "must be false for publication" });
 		for (const [path, bytes] of bundle.files) {
-			for (const finding of findCredentials(new TextDecoder().decode(bytes))) {
-				issues.push({ file: path, message: `looks like a credential (${finding}); not publishable` });
+			for (const finding of findCredentials(path)) issues.push({ file: path, message: `path looks like a credential (${finding}); not publishable` });
+			const text = LOOSE.decode(bytes);
+			for (const finding of findCredentials(text)) issues.push({ file: path, message: `looks like a credential (${finding}); not publishable` });
+			if (!path.endsWith(".json")) continue;
+			const json = parseJson(bytes);
+			if ("value" in json) {
+				for (const key of findSecretKeys(json.value)) issues.push({ file: path, field: key, message: "is a secret-like field with a value; not publishable" });
 			}
 		}
 	}
 
-	return report(manifest);
+	return report();
 }
