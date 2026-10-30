@@ -58,7 +58,7 @@ The store is one interface — `put`, `head`, `get`, `statement`, `hold`, `dispo
 | Backend | Write-once mechanism | Use |
 | --- | --- | --- |
 | **S3** | Object Lock, compliance mode, versioned bucket | Default. Every deployment target already speaks it. |
-| **MinIO** | Object Lock, compliance mode | Local bring-up, on-premises, air-gapped deployments. Same code path as S3. |
+| **RustFS** | Object Lock, compliance mode | The self-hosted store: in-cluster, on-premises, air-gapped, and local bring-up. Same code path as S3. |
 | **Filesystem** | none | Development only. A dev sink signs nothing; it hashes its own claim and reports itself **non-conforming** so a run can never accidentally look audited. |
 | **Others** | vendor immutability | GCS retention policies, Azure Blob immutable storage, and customer-operated WORM appliances fit the same interface. |
 
@@ -118,7 +118,7 @@ Formal obligations live in [`docs/requirements/`](./docs/requirements/README.md)
 
 ## Local bring-up (planned)
 
-The first deliverable is a `docker compose up` that starts MinIO with Object Lock, the Pensieve sink, and a read-only viewer, then runs a scripted agent session against it so the whole path is visible in one terminal and one browser tab:
+The first deliverable is a `docker compose up` that starts RustFS with Object Lock, the Pensieve sink, and a read-only viewer, then runs a scripted agent session against it so the whole path is visible in one terminal and one browser tab:
 
 ```bash
 git clone git@github.com:ai-outfitter/pensieve.git

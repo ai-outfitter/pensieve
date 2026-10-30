@@ -86,7 +86,7 @@ docker compose up -d
 docker compose exec workbench outfitter
 ```
 
-`compose.yaml` starts MinIO with a bucket created **with object lock** and a default COMPLIANCE retention, the sink, and a workbench built `FROM ghcr.io/ai-outfitter/outfitter`. It installs the Claude and Codex hooks and the advisory Pi launcher before the image drops to uid 1000. The launcher does not intercept `outfitter run`; the workbench still needs explicit Outfitter-to-Pi extension wiring before that path collects Pi evidence.
+`compose.yaml` starts RustFS, the self-hosted object store, with a bucket created **with object lock** and a default COMPLIANCE retention, the sink, and a workbench built `FROM ghcr.io/ai-outfitter/outfitter`. It installs the Claude and Codex hooks and the advisory Pi launcher before the image drops to uid 1000. The launcher does not intercept `outfitter run`; the workbench still needs explicit Outfitter-to-Pi extension wiring before that path collects Pi evidence.
 
 The sink runs unattested until you give it a key, and says so on startup:
 
