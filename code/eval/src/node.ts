@@ -5,7 +5,7 @@
  * Writing is append-only and has exactly three steps (EVL-001.4):
  *   createBundle   → a new directory with a validated `running` manifest
  *   addArtifacts   → new files while the run is running
- *   finalizeBundle → once: final status, results, gaps (and last files)
+ *   finalizeBundle → once: final status, results, gaps (and new prompts, last files)
  * One process writes a bundle; concurrent writers are not supported.
  */
 import { lstat, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
@@ -22,12 +22,18 @@ export type Files = Record<string, FileContent>;
 /** A manifest as a writer supplies it: artifacts are computed, summary is derived. */
 export type ManifestInput = Omit<Manifest, "artifacts" | "summary">;
 
-/** The only fields a run may set when it ends. Identity, subject, model, and prompts are fixed at creation. */
+/**
+ * The only fields a run may set when it ends. Identity, subject, model, and the
+ * prompts declared at creation are fixed; prompts that only exist once cases
+ * have run (such as model-authored job instructions) may be appended.
+ */
 export interface Finalization {
 	status: Exclude<RunStatus, "running">;
 	ended_at: string | null;
 	results: Manifest["results"];
 	gaps: Manifest["gaps"];
+	/** New prompt entries, appended after the ones declared at creation. Their files go in `files` or were added earlier. */
+	prompts?: Manifest["prompts"];
 	files?: Files;
 }
 
@@ -127,7 +133,7 @@ export async function addArtifacts(dir: string, files: Files): Promise<Manifest>
 	return commit(dir, { ...current, artifacts: [...current.artifacts, ...artifacts] }, bytes);
 }
 
-/** End a running bundle, once. Only status, end time, results, gaps, and new files may be set. EVL-001.4.6. */
+/** End a running bundle, once. Only status, end time, results, gaps, new prompts, and new files may be set. EVL-001.4.6. */
 export async function finalizeBundle(dir: string, end: Finalization): Promise<Manifest> {
 	const current = await running(dir);
 	if ((end.status as string) === "running") throw new Error("finalize needs a final status");
@@ -137,6 +143,7 @@ export async function finalizeBundle(dir: string, end: Finalization): Promise<Ma
 		run: { ...current.run, status: end.status, ended_at: end.ended_at },
 		results: end.results,
 		gaps: end.gaps,
+		prompts: [...current.prompts, ...(end.prompts ?? [])],
 		summary: summarize(end.results),
 		artifacts: [...current.artifacts, ...artifacts],
 	}, bytes);

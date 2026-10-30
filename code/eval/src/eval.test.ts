@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdir, readFile, readdir, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { canonicalDigest, canonicalize, compareManifests, MAX_MANIFEST_BYTES, STANDARD, validateBundleFiles, validateManifest, type Manifest } from "./index.ts";
+import { canonicalDigest, canonicalize, compareManifests, sha256Hex, MAX_MANIFEST_BYTES, STANDARD, validateBundleFiles, validateManifest, type Manifest } from "./index.ts";
 import { addArtifacts, createBundle, finalizeBundle, readManifest, validateBundle, writeBundle, type ManifestInput } from "./node.ts";
 import { fixture, tempRoot } from "./test-fixture.ts";
 import { canonicalize as serverCanonicalize } from "../../server/src/canonical.ts";
@@ -320,7 +320,18 @@ describe("writing", () => {
 
 		await addArtifacts(dir, cases);
 		await expect(addArtifacts(dir, { "prompts/scan.txt": "changed" })).rejects.toThrow("never rewritten");
-		await finalizeBundle(dir, { status: "complete", ended_at: "2026-10-30T15:02:00Z", results, gaps, files: { "report.md": report! } });
+		const jobPrompt = "Draft the weekly brief from the granted calendar only.\n";
+		await expect(finalizeBundle(dir, {
+			status: "complete", ended_at: "2026-10-30T15:02:00Z", results, gaps,
+			prompts: [{ step: "scan", digest: await sha256Hex(jobPrompt), path: "prompts/job-brief.txt" }],
+			files: { "prompts/job-brief.txt": jobPrompt },
+		})).rejects.toThrow("duplicate prompt step scan");
+		const final = await finalizeBundle(dir, {
+			status: "complete", ended_at: "2026-10-30T15:02:00Z", results, gaps,
+			prompts: [{ step: "job-brief", digest: await sha256Hex(jobPrompt), path: "prompts/job-brief.txt" }],
+			files: { "report.md": report!, "prompts/job-brief.txt": jobPrompt },
+		});
+		expect(final.prompts.map((p) => p.step)).toEqual(["scan", "job-brief"]);
 		expect(await validateBundle(dir)).toMatchObject({ valid: true, status: "complete", issues: [] });
 		expect(await readdir(dir)).not.toContainEqual(expect.stringContaining(".tmp"));
 
