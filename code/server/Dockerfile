@@ -6,6 +6,7 @@ WORKDIR /app
 FROM base AS deps
 COPY package.json bun.lock ./
 COPY server/package.json server/
+COPY eval/package.json eval/
 COPY importer/package.json importer/
 COPY collectors/core/package.json collectors/core/
 COPY collectors/claude/package.json collectors/claude/
@@ -18,6 +19,8 @@ ENV NODE_ENV=production
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json tsconfig.json ./
 COPY server ./server
+# server/src/canonical.ts re-exports the shared canonicalization from eval.
+COPY eval ./eval
 COPY collectors ./collectors
 
 # The sink writes only to the object store and its index; it needs no write

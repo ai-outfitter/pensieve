@@ -111,6 +111,8 @@ Formal obligations live in [`docs/requirements/`](./docs/requirements/README.md)
 - [SRV-001: Evidence Sink](./docs/requirements/SRV-001-evidence-sink.md) — identity, ingest, the record model, write-once storage and statements, retention and holds, landing records, reconciliation, release bundles, verification.
 - [CLC-001: Harness Collectors](./docs/requirements/CLC-001-harness-collectors.md) — install authority, commit segmentation, capture completeness, redaction, delivery, per-harness projections, bypass.
 - [CICD-001: Evidence Gates](./docs/requirements/CICD-001-evidence-gates.md) — the four forge gates, their authority, failure semantics, the coverage epoch and ratchet, forge portability.
+- [RTR-001: Evidence Retrieval](./docs/requirements/RTR-001-evidence-retrieval.md) — reading stored evidence back by digest, session, and commit.
+- [EVL-001: Evaluation Bundles](./docs/requirements/EVL-001-evaluation-bundles.md) — *proposed standard.* A versioned, digest-bound bundle for agent-workflow evaluation runs, its offline validator, and the rules for comparing two runs.
 
 [`code/example-repo/`](./code/example-repo/README.md) is the working shape of CICD-001: five GitHub workflows, two rulesets, and a repository policy file.
 
