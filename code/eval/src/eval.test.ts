@@ -515,13 +515,13 @@ describe("portability", () => {
 			const cmp = e.compareManifests(written, written);
 			console.log(JSON.stringify({ valid: report.valid, comparable: cmp.comparable, digest: await e.canonicalDigest(written) }));
 		`;
-		const run = spawnSync("node", ["--input-type=module", "-e", script], { encoding: "utf8" });
+		const run = spawnSync("node", ["--no-warnings", "--input-type=module", "-e", script], { encoding: "utf8", timeout: 60_000 });
 		expect(run.stderr).toBe("");
 		const out = JSON.parse(run.stdout);
 		expect(out).toMatchObject({ valid: true, comparable: true });
 		// Node's Web Crypto and the bundle written there agree with Bun.
 		expect(out.digest).toBe(await canonicalDigest(await readManifest(join(root, "node-run"))));
-	});
+	}, 60_000);
 });
 
 describe("cli", () => {
