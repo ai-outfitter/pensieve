@@ -165,9 +165,13 @@ describe("S3 presigned PUT against object store", () => {
 
 		const wrongResponse = await fetch(signed.url, { method: signed.method, headers: signed.headers, body: wrong });
 		const wrongText = await wrongResponse.text();
-		console.log(`wrong checksum: ${wrongResponse.status} ${/XAmzContentChecksumMismatch/.test(wrongText) ? "XAmzContentChecksumMismatch" : wrongText}`);
+		console.log(`wrong checksum: ${wrongResponse.status} ${/XAmzContentChecksumMismatch|BadDigest/.exec(wrongText)?.[0] ?? wrongText}`);
+		// The property is that a body whose checksum mismatches is rejected and
+		// never stored, not S3's exact error code: AWS S3 answers
+		// XAmzContentChecksumMismatch, RustFS answers BadDigest.
 		expect(wrongResponse.status).toBe(400);
-		expect(wrongText).toContain("XAmzContentChecksumMismatch");
+		expect(wrongText).toMatch(/<Code>(XAmzContentChecksumMismatch|BadDigest)<\/Code>/);
+		expect(await store.head(key)).toBeNull();
 
 		const changedMethod = await fetch(signed.url, { method: "POST", headers: signed.headers, body: bytes });
 		console.log(`method changed: ${changedMethod.status}`);
