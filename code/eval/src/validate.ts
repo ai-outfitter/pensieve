@@ -19,7 +19,7 @@ export const HEX64 = /^[0-9a-f]{64}$/;
 const HEX40 = /^[0-9a-f]{40}$/;
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** Strict ISO-8601 date-time with an explicit offset. */
-export const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
+const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 
 /**
  * A TIMESTAMP-shaped string naming a real instant: `Date.parse` rolls

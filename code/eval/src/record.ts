@@ -197,10 +197,6 @@ function textOrNull(c: Checker, v: unknown, field: string): void {
 	if (v !== null && typeof v !== "string") c.fail(field, "must be a string or null");
 }
 
-function intOrNull(c: Checker, v: unknown, field: string): void {
-	if (v !== null) c.int(v, field);
-}
-
 /** Schema and internal consistency of a parsed record value. EVL-002.3. */
 function checkRecord(value: unknown, file: string): { issues: Issue[]; gaps: RecordGap[] } {
 	const c = new Checker(file);
@@ -270,7 +266,7 @@ function checkRecord(value: unknown, file: string): { issues: Issue[]; gaps: Rec
 	}
 
 	if (exact(c, r.usage, "usage", KEYS.usage)) {
-		for (const key of KEYS.usage) intOrNull(c, r.usage[key], `usage.${key}`);
+		for (const key of KEYS.usage) if (r.usage[key] !== null) c.int(r.usage[key], `usage.${key}`);
 	}
 
 	const callIds = new Set<string>();
