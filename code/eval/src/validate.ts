@@ -21,6 +21,18 @@ const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** Strict ISO-8601 date-time with an explicit offset. */
 export const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 
+/**
+ * A TIMESTAMP-shaped string naming a real instant: `Date.parse` rolls
+ * 2026-02-30 over to March 2 and accepts hour 24, so the fields are checked.
+ */
+function isCalendarTime(v: string): boolean {
+	const [y, mo, d, h, mi, s] = [v.slice(0, 4), v.slice(5, 7), v.slice(8, 10), v.slice(11, 13), v.slice(14, 16), v.slice(17, 19)].map(Number) as number[];
+	const days = new Date(Date.UTC(y!, mo!, 0)).getUTCDate();
+	const offset = /([+-])(\d{2}):(\d{2})$/.exec(v);
+	if (offset && (Number(offset[2]) > 23 || Number(offset[3]) > 59)) return false;
+	return mo! >= 1 && mo! <= 12 && d! >= 1 && d! <= days && h! <= 23 && mi! <= 59 && s! <= 59 && !Number.isNaN(Date.parse(v));
+}
+
 /** Limits that keep validation bounded on hostile input. EVL-001.8.3. */
 export const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
 const MAX_DEPTH = 32;
@@ -87,7 +99,7 @@ export class Checker {
 		return typeof v === "boolean" || this.fail(field, "must be a boolean");
 	}
 	time(v: unknown, field: string): v is string {
-		return (typeof v === "string" && TIMESTAMP.test(v) && !Number.isNaN(Date.parse(v))) ||
+		return (typeof v === "string" && TIMESTAMP.test(v) && isCalendarTime(v)) ||
 			this.fail(field, "must be an ISO-8601 date-time with an offset, like 2026-10-30T15:00:00Z");
 	}
 	strings(v: unknown, field: string): v is string[] {

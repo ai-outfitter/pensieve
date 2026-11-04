@@ -107,6 +107,24 @@ describe("agent records", () => {
 		expect(fields({ ...r, model: { ...r.model, settings: { anything: { goes: 1 } } } })).toEqual([]);
 	});
 
+	test("a missing field fails, at any level, including a tool call's input and output", async () => {
+		// THIS TEST VALIDATES A HARD REQUIREMENT (EVL-002.3.1)
+		// YOU MUST NOT MODIFY THIS TEST UNLESS THE REQUIREMENT CHANGES
+		const r = await built();
+		const without = (key: string) => {
+			const tool = structuredClone(r);
+			delete (tool.tool_calls[0] as unknown as Record<string, unknown>)[key];
+			return tool;
+		};
+		expect(fields(without("input"))).toEqual(["tool_calls[0].input: is missing"]);
+		expect(fields(without("output"))).toContain("tool_calls[0].output: is missing");
+		const { blobs: _, ...noBlobs } = r;
+		expect(fields(noBlobs)).toContain("blobs: is missing");
+		const { text: __, ...response } = r.response;
+		expect(fields({ ...r, response })).toContain("response.text: is missing");
+		await expect(buildRecord({ ...(await input()).record, tool_calls: [{ ...r.tool_calls[0]!, input: undefined }] })).rejects.toThrow("tool_calls[0].input: is missing");
+	});
+
 	test("an unknown standard is rejected, not guessed at", async () => {
 		// THIS TEST VALIDATES A HARD REQUIREMENT (EVL-002.1.3)
 		// YOU MUST NOT MODIFY THIS TEST UNLESS THE REQUIREMENT CHANGES
@@ -129,6 +147,11 @@ describe("agent records", () => {
 		expect(fields({ ...r, timing: { started_at: "2026-11-04T10:00:02Z", ended_at: "2026-11-04T10:00:01Z" } })).toEqual([
 			"timing.ended_at: is before timing.started_at",
 		]);
+		// Date.parse rolls these over to a different instant; they are not real times.
+		for (const bad of ["2026-02-30T10:00:00Z", "2026-11-04T24:00:00Z", "2026-11-04T10:60:00Z", "2026-11-04T10:00:00+24:00"]) {
+			expect(fields({ ...r, recorded_at: bad })).toContain("recorded_at: must be an ISO-8601 date-time with an offset, like 2026-10-30T15:00:00Z");
+		}
+		expect(fields({ ...r, recorded_at: "2028-02-29T23:59:59.999+05:30" })).toEqual([]);
 	});
 
 	test("ids and digests are well-formed", async () => {

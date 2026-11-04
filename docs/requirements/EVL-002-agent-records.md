@@ -96,9 +96,9 @@ that happens to have the same three keys.
 
 ### EVL-002.3: Schema
 
-1. A record MUST NOT contain fields the standard does not define, except inside `model.settings`. A validator MUST reject unknown fields rather than ignore them.
+1. A record MUST NOT contain fields the standard does not define, except inside `model.settings`. A validator MUST reject unknown fields rather than ignore them, and MUST reject a record missing any field the standard defines (a null value is written as `null`, never left out).
 2. Digests (blob digests, `request.system_digest`) MUST be 64 lowercase hex characters, sizes non-negative integers, and media types `type/subtype`.
-3. Timestamps MUST be ISO-8601 date-times with an explicit offset, and `timing.ended_at` MUST NOT be earlier than `timing.started_at`.
+3. Timestamps MUST be ISO-8601 date-times with an explicit offset that name a real calendar instant (no February 30, no hour 24), and `timing.ended_at` MUST NOT be earlier than `timing.started_at`.
 4. `status` MUST agree with the rest of the record: `complete` needs `error = null` and a `finish_reason`; `error` needs a non-empty `error`; `aborted` MAY have either.
 5. A `thread` context MUST name `thread_id`; a `workflow-step` context MUST name `workflow_run_id` and `workflow_step`.
 6. A tool call MUST have a unique `call_id` within the record. Its input and output MUST each be inline or in a blob, never both. `ok` needs `error = null`; `error` needs a non-empty `error`; `omitted` (output not captured) MUST have no output.

@@ -171,8 +171,20 @@ function cited(r: Obj): { field: string; ref: unknown }[] {
 	return out;
 }
 
+/** Every key a record object defines must be present: `Checker.obj` only rejects unknown ones. */
+function missing(c: Checker, v: Obj, field: string, keys: readonly string[]): void {
+	for (const key of keys) if (!Object.hasOwn(v, key)) c.fail(field ? `${field}.${key}` : key, "is missing");
+}
+
+/** An object with exactly these keys: none unknown, none missing. EVL-002.3.1. */
+function exact(c: Checker, v: unknown, field: string, keys: readonly string[]): v is Obj {
+	if (!c.obj(v, field, keys)) return false;
+	missing(c, v, field, keys);
+	return true;
+}
+
 function checkRef(c: Checker, v: unknown, field: string): v is BlobRef {
-	if (!c.obj(v, field, KEYS.blob)) return false;
+	if (!exact(c, v, field, KEYS.blob)) return false;
 	const ok = [c.str(v.digest, `${field}.digest`, HEX64), c.int(v.size, `${field}.size`), c.str(v.media_type, `${field}.media_type`, MEDIA_TYPE)];
 	return ok.every(Boolean);
 }
@@ -195,7 +207,7 @@ function checkRecord(value: unknown, file: string): { issues: Issue[]; gaps: Rec
 	const gaps: RecordGap[] = [];
 	const problem = jsonProblem(value);
 	if (problem) return { issues: [{ file, message: problem }], gaps };
-	if (!c.obj(value, "", KEYS.record)) return { issues: c.issues, gaps };
+	if (!exact(c, value, "", KEYS.record)) return { issues: c.issues, gaps };
 	const r = value;
 
 	// EVL-002.1.3: never guess at an unknown standard.
@@ -208,12 +220,12 @@ function checkRecord(value: unknown, file: string): { issues: Issue[]; gaps: Rec
 	c.time(r.recorded_at, "recorded_at");
 	c.oneOf(r.evidence, "evidence", RECORD_EVIDENCE);
 
-	if (c.obj(r.client, "client", KEYS.client)) {
+	if (exact(c, r.client, "client", KEYS.client)) {
 		c.oneOf(r.client.kind, "client.kind", CLIENT_KINDS);
 		c.strOrNull(r.client.version, "client.version");
 	}
 
-	if (c.obj(r.context, "context", KEYS.context)) {
+	if (exact(c, r.context, "context", KEYS.context)) {
 		const x = r.context;
 		c.oneOf(x.kind, "context.kind", CONTEXT_KINDS);
 		for (const key of KEYS.context.slice(1)) c.strOrNull(x[key], `context.${key}`);
@@ -225,18 +237,18 @@ function checkRecord(value: unknown, file: string): { issues: Issue[]; gaps: Rec
 		}
 	}
 
-	if (c.obj(r.sequence, "sequence", KEYS.sequence)) {
+	if (exact(c, r.sequence, "sequence", KEYS.sequence)) {
 		c.str(r.sequence.turn_key, "sequence.turn_key");
 		c.int(r.sequence.step, "sequence.step");
 	}
 
-	if (c.obj(r.model, "model", KEYS.model)) {
+	if (exact(c, r.model, "model", KEYS.model)) {
 		c.str(r.model.provider, "model.provider");
 		c.str(r.model.id, "model.id");
 		if (!isObj(r.model.settings)) c.fail("model.settings", "must be an object");
 	}
 
-	if (c.obj(r.request, "request", KEYS.request)) {
+	if (exact(c, r.request, "request", KEYS.request)) {
 		refOrNull(c, r.request.body, "request.body");
 		c.strOrNull(r.request.system_digest, "request.system_digest", HEX64);
 		if (c.strings(r.request.tool_names, "request.tool_names")) {
@@ -249,7 +261,7 @@ function checkRecord(value: unknown, file: string): { issues: Issue[]; gaps: Rec
 		if (r.request.body === null) gaps.push({ field: "request.body", reason: "the exact provider request body was not captured" });
 	}
 
-	if (c.obj(r.response, "response", KEYS.response)) {
+	if (exact(c, r.response, "response", KEYS.response)) {
 		refOrNull(c, r.response.body, "response.body");
 		textOrNull(c, r.response.text, "response.text");
 		c.strOrNull(r.response.finish_reason, "response.finish_reason");
@@ -257,12 +269,13 @@ function checkRecord(value: unknown, file: string): { issues: Issue[]; gaps: Rec
 		if (r.response.body === null && r.status === "complete") gaps.push({ field: "response.body", reason: "the provider response body was not captured" });
 	}
 
-	if (c.obj(r.usage, "usage", KEYS.usage)) {
+	if (exact(c, r.usage, "usage", KEYS.usage)) {
 		for (const key of KEYS.usage) intOrNull(c, r.usage[key], `usage.${key}`);
 	}
 
 	const callIds = new Set<string>();
 	c.list(r.tool_calls, "tool_calls", KEYS.tool, (t, f) => {
+		missing(c, t, f, KEYS.tool);
 		if (c.str(t.call_id, `${f}.call_id`)) {
 			if (callIds.has(t.call_id)) c.fail(`${f}.call_id`, `duplicate call id ${t.call_id}`);
 			callIds.add(t.call_id);
@@ -283,7 +296,7 @@ function checkRecord(value: unknown, file: string): { issues: Issue[]; gaps: Rec
 		}
 	});
 
-	if (c.obj(r.timing, "timing", KEYS.timing)) {
+	if (exact(c, r.timing, "timing", KEYS.timing)) {
 		const started = c.time(r.timing.started_at, "timing.started_at");
 		const ended = c.time(r.timing.ended_at, "timing.ended_at");
 		if (started && ended && Date.parse(r.timing.ended_at as string) < Date.parse(r.timing.started_at as string)) {
