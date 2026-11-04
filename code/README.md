@@ -9,7 +9,7 @@ A Bun workspace. Three published pieces and one shared library.
 | `@pensieve/collector-claude` | `collectors/claude/` | Claude Code collector — managed-settings hooks. |
 | `@pensieve/collector-codex` | `collectors/codex/` | Codex collector — managed lifecycle hooks. |
 | `@pensieve/collector-pi` | `collectors/pi/` | Pi collector — in-process extension. |
-| `@pensieve/eval` | `eval/` | Evaluation bundles: writer, offline validator, comparator, `pensieve-eval` CLI. Implements [EVL-001](../docs/requirements/EVL-001-evaluation-bundles.md) (proposed). |
+| `@pensieve/eval` | `eval/` | Evaluation bundles: writer, offline validator, comparator, `pensieve-eval` CLI. Agent records: builder and offline validator. Implements [EVL-001](../docs/requirements/EVL-001-evaluation-bundles.md) and [EVL-002](../docs/requirements/EVL-002-agent-records.md) (proposed). |
 | `@pensieve/importer` | `importer/` | Client-only import of historical Claude Code, Codex, and pi transcripts. |
 | — | `example-repo/` | The forge gates as GitHub workflows and rulesets. Implements [CICD-001](../docs/requirements/CICD-001-evidence-gates.md). |
 
@@ -26,6 +26,12 @@ Evaluation bundles ([EVL-001](../docs/requirements/EVL-001-evaluation-bundles.md
 bun run eval/src/cli.ts validate <bundle-dir...> [--publication] [--json]
 bun run eval/src/cli.ts compare <baseline-dir> <candidate-dir> [--json]
 bun run eval/src/cli.ts summary <bundle-dir> [--json]
+```
+
+Agent records ([EVL-002](../docs/requirements/EVL-002-agent-records.md)) are validated offline, optionally against a copy of the bucket's `blobs/`:
+
+```sh
+bun run eval/src/cli.ts record validate <record-file...> [--blobs <dir>] [--json]
 ```
 
 Historical transcripts can be classified without writing anything:

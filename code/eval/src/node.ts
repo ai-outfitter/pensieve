@@ -11,9 +11,10 @@
 import { lstat, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { canonicalize, sha256Hex } from "./canonical.ts";
+import { MAX_RECORD_BYTES, recordKey, validateRecord, verifyRecordBlobs, type RecordReport } from "./record.ts";
 import { summarize } from "./report.ts";
 import { MANIFEST_FILE, RECEIPT_FILE, type Artifact, type Issue, type Manifest, type RunStatus, type ValidationReport } from "./types.ts";
-import { isSafePath, validateBundleFiles, validateManifest, type BundleFiles } from "./validate.ts";
+import { HEX64, isObj, isSafePath, parseJson, validateBundleFiles, validateManifest, type BundleFiles } from "./validate.ts";
 
 /** File contents: bytes and strings are written as given; anything else as canonical JSON. */
 export type FileContent = Uint8Array | string | object;
@@ -188,5 +189,47 @@ export async function validateBundle(dir: string, options: { publication?: boole
 		report.issues.push({ file: MANIFEST_FILE, field: "run.id", message: `is ${report.run} but the bundle directory is ${basename(dir)}` });
 		report.valid = false;
 	}
+	return report;
+}
+
+const RECORD_PATH = /(?:^|\/)(records\/\d{4}\/\d{2}\/\d{2}\/[^/]+\.json)$/;
+
+/**
+ * Validate a record file offline (EVL-002). The file is named `<id>.json`, and
+ * when it sits under `records/<yyyy>/<mm>/<dd>/` the date must be its
+ * `recorded_at` day. Given `blobs`, a directory holding `<sha256>` files (a
+ * copy of the bucket's `blobs/`), every listed blob must be there, unchanged.
+ */
+export async function validateRecordFile(path: string, options: { blobs?: string } = {}): Promise<RecordReport> {
+	const file = basename(path);
+	let bytes: Uint8Array;
+	try {
+		const stat = await lstat(path);
+		if (!stat.isFile()) return { valid: false, id: null, issues: [{ file: path, message: "is not a regular file" }], gaps: [] };
+		bytes = new Uint8Array(await readFile(path));
+	} catch (error) {
+		return { valid: false, id: null, issues: [{ file: path, message: `could not be read: ${(error as Error).message}` }], gaps: [] };
+	}
+	const report = validateRecord(bytes, { file });
+	const parsed = bytes.byteLength <= MAX_RECORD_BYTES ? parseJson(bytes) : null;
+	if (!parsed || !("value" in parsed) || !isObj(parsed.value)) return report; // not readable as a record
+	const record = parsed.value;
+	if (report.id !== null && file !== `${report.id}.json`) report.issues.push({ file, message: `must be named ${report.id}.json` });
+	const placed = path.replaceAll("\\", "/").match(RECORD_PATH)?.[1];
+	if (placed && report.id !== null && typeof record.recorded_at === "string" && !Number.isNaN(Date.parse(record.recorded_at))) {
+		const key = recordKey({ id: report.id, recorded_at: record.recorded_at });
+		if (placed !== key) report.issues.push({ file, message: `is at ${placed} but its key is ${key}` });
+	}
+	if (options.blobs !== undefined) {
+		const dir = options.blobs;
+		report.issues.push(...await verifyRecordBlobs(record, async (digest) => {
+			if (!HEX64.test(digest)) return null;
+			const stat = await exists(join(dir, digest));
+			if (!stat) return null;
+			if (!stat.isFile()) throw new Error("is not a regular file");
+			return new Uint8Array(await readFile(join(dir, digest)));
+		}));
+	}
+	report.valid = report.issues.length === 0;
 	return report;
 }
